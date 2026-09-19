@@ -4,7 +4,7 @@
   <p class="eyebrow">A deterministic static site generator in Rust</p>
   <h1>Build websites from <span>content, templates, and signals.</span></h1>
   <p class="lead">Signal turns Markdown, templates, static assets, and a small TOML configuration into predictable static output.</p>
-  <div class="actions"><a class="button primary" href="/docs/getting-started/">Get started</a><a class="button" href="https://github.com/whepper/signal-ssg">View on GitHub</a></div>
+  <div class="actions"><a class="button primary" href="{{ base_url }}docs/getting-started/">Get started</a><a class="button" href="https://github.com/whepper/signal-ssg">View on GitHub</a></div>
 </section>
 <section class="pipeline"><div><strong>content</strong><span>Markdown + metadata</span></div><div class="arrow">→</div><div><strong>SiteModel</strong><span>normalized data</span></div><div class="arrow">→</div><div><strong>artifacts</strong><span>planned output</span></div><div class="arrow">→</div><div><strong>static site</strong><span>HTML, feeds, assets</span></div></section>
 <section class="cards"><article><h2>Deterministic</h2><p>Stable ordering, routes, generated data, and build manifests make output predictable.</p></article><article><h2>Safe by construction</h2><p>Explicit render contexts, HTML escaping, URL allow-lists, and hardened output paths keep boundaries visible.</p></article><article><h2>Incremental</h2><p>Signal records build inputs and output digests so unchanged artifacts can be reused.</p></article></section>
@@ -14,6 +14,6 @@
 ├── static/
 └── signal.toml
 
-signal build</code></pre></div><div><p class="eyebrow">Beta</p><h2>0.1.0-beta.1</h2><p>Signal is actively evolving. Explore the current capabilities and the architecture behind them.</p><p><a href="/features/">Explore features →</a></p></div></section>
-<section class="recent"><div class="section-heading"><p class="eyebrow">From the project</p><h2>Recent posts</h2></div>{% for e in recent %}<article class="post-card"><a href="{{ e.route }}"><h3>{{ e.title }}</h3>{% if e.description %}<p>{{ e.description }}</p>{% endif %}{% if e.date_formatted %}<small>{{ e.date_formatted }}</small>{% endif %}</a></article>{% endfor %}</section>
+signal build</code></pre></div><div><p class="eyebrow">Beta</p><h2>0.1.0-beta.1</h2><p>Signal is actively evolving. Explore the current capabilities and the architecture behind them.</p><p><a href="{{ base_url }}docs/features/">Explore features →</a></p></div></section>
+<section class="recent"><div class="section-heading"><p class="eyebrow">From the project</p><h2>Recent posts</h2></div>{% for e in recent %}<article class="post-card"><a href="{{ base_url }}{{ e.route }}"><h3>{{ e.title }}</h3>{% if e.description %}<p>{{ e.description }}</p>{% endif %}{% if e.date_formatted %}<small>{{ e.date_formatted }}</small>{% endif %}</a></article>{% endfor %}</section>
 {% endblock %}
