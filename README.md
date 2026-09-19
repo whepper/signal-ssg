@@ -77,6 +77,14 @@ route_prefix = "/posts/"
 
 See the [configuration guide](docs/configuration.md) for all currently supported options.
 
+## How builds work
+
+Successful builds write `.signal/manifest.json`. On the next build, Signal can reuse an artifact only when the previous generation is compatible and every recorded input digest still matches. Stale outputs are reconciled as **previous manifest − current plan**.
+
+Template-rendered artifacts depend on the **complete loaded template set**, so inheritance or include changes invalidate affected outputs conservatively. Reuse **consults mtimes** only for diagnostics; mtimes are not part of the reuse predicate.
+
+A failed build leaves the previous manifest in place, but the build is not **whole-tree transactional**: artifacts that were already written are not automatically rolled back.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
