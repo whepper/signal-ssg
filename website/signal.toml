@@ -14,9 +14,9 @@ limit = 20
 
 [menus.main]
 items = [
-  { label = "Home", url = "/" },
-  { label = "Docs", url = "/docs/getting-started/" },
-  { label = "Features", url = "/features/" },
+  { label = "Home", url = "https://whepper.github.io/signal-ssg/" },
+  { label = "Docs", url = "https://whepper.github.io/signal-ssg/docs/getting-started/" },
+  { label = "Features", url = "https://whepper.github.io/signal-ssg/docs/features/" },
   { label = "GitHub", url = "https://github.com/whepper/signal-ssg" },
 ]
 
@@ -26,3 +26,10 @@ route_prefix = "/posts/"
 template = "post.html"
 title = "Posts"
 description = "Notes from the Signal project."
+
+[collections.docs]
+source = "content/docs"
+route_prefix = "/docs/"
+template = "doc.html"
+title = "Documentation"
+description = "Guides and reference documentation for Signal."
