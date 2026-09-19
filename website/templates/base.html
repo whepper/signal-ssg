@@ -11,14 +11,14 @@
   {% if og_url %}<meta property="og:url" content="{{ og_url }}">{% endif %}
   {% if og_type %}<meta property="og:type" content="{{ og_type }}">{% endif %}
   {% if base_url %}<link rel="alternate" type="application/rss+xml" title="{{ site_title }} RSS" href="{{ base_url }}index.xml">{% endif %}
-  <link rel="stylesheet" href="/css/site.css">
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ base_url }}css/site.css">
+  <link rel="icon" href="{{ base_url }}favicon.svg" type="image/svg+xml">
   {% if json_ld %}<script type="application/ld+json">{{ json_ld | safe }}</script>{% endif %}
 </head>
 <body>
   <header class="site-header">
     <div class="container header-inner">
-      <a class="brand" href="/"><span class="brand-mark">S</span><span>{{ site_title }}</span></a>
+      <a class="brand" href="{{ base_url }}"><span class="brand-mark">S</span><span>{{ site_title }}</span></a>
       {% if menus %}<nav aria-label="Main">{% for item in menus.main %}<a{% if item.active %} aria-current="page"{% endif %} href="{{ item.url }}">{{ item.label }}</a>{% endfor %}</nav>{% endif %}
     </div>
   </header>
