@@ -56,7 +56,7 @@ fn readme_documents_current_reuse_and_template_semantics() {
         "complete loaded template set",
         "previous manifest − current plan",
         "whole-tree transactional",
-        "consults mtimes",
+        "mtimes are never consulted",
     ] {
         assert!(
             README.contains(required),

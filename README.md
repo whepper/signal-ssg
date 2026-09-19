@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/whepper/signal-ssg/actions/workflows/ci.yml/badge.svg)](https://github.com/whepper/signal-ssg/actions/workflows/ci.yml)
 
-> **Beta · 0.1.0-beta.1**
+> **0.2.0**
 
 Signal is a deterministic static site generator written in Rust.
 
@@ -81,7 +81,7 @@ See the [configuration guide](docs/configuration.md) for all currently supported
 
 Successful builds write `.signal/manifest.json`. On the next build, Signal can reuse an artifact only when the previous generation is compatible and every recorded input digest still matches. Stale outputs are reconciled as **previous manifest − current plan**.
 
-Template-rendered artifacts depend on the **complete loaded template set**, so inheritance or include changes invalidate affected outputs conservatively. Reuse **consults mtimes** only for diagnostics; mtimes are not part of the reuse predicate.
+Template-rendered artifacts depend on the **complete loaded template set**, so inheritance or include changes invalidate affected outputs conservatively. Reuse is a total per-artifact predicate over recorded digests; **mtimes are never consulted**.
 
 A failed build leaves the previous manifest in place, but the build is not **whole-tree transactional**: artifacts that were already written are not automatically rolled back.
 
@@ -94,15 +94,16 @@ A failed build leaves the previous manifest in place, but the build is not **who
 - [Templates](docs/templates.md)
 - [Features](docs/features.md)
 - [Deployment](docs/deployment.md)
+- [Release notes](docs/releases/)
 - [Architecture](docs/architecture.md)
 - [Architecture Decision Records](docs/adr/)
 - [Hugo migration notes](docs/migration/)
 
 ## Current status
 
-Signal is in beta. The current release is **0.1.0-beta.1** and compatibility may change before 1.0.
+Signal is in beta. The current release is **0.2.0** and compatibility may change before 1.0.
 
-Implemented today include Markdown ingestion, YAML/TOML front matter, collections, home and section pages, topics/taxonomy pages, RSS, sitemap generation, search-index generation, template inheritance, deterministic manifests, hash-based incremental reuse, and hardened output/path handling.
+Implemented today include Markdown ingestion, YAML/TOML front matter, collections, home and section pages, topics/taxonomy pages, RSS feeds (main, section, taxonomy label-index, and term), sitemap and robots.txt generation, a themed 404 page, search-index generation, related entries, template inheritance, deterministic manifests, hash-based incremental reuse, optional HTML output minification, opt-in Git-derived last-modified dates, and hardened output/path handling.
 
 Image processing, pagination, aliases, and plugins are deliberately deferred.
 

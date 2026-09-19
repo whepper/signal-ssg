@@ -4,15 +4,20 @@ base_url = "https://example.com/"
 home_collection = "posts"
 author = "Sample Author"
 date_format = "%-d %B %Y"
+not_found_template = "404.html"
 
 [taxonomy]
 route_prefix = "/topics/"
 title = "Topics"
 
-# Feeds are explicit opt-in: the main feed plus one feed per taxonomy term,
+# Feeds are explicit opt-in: the main feed, one feed per collection
+# (section), the taxonomy label feed, and one feed per taxonomy term, all
 # capped here at 2 items to exercise truncation.
 [feed]
 limit = 2
+
+# robots.txt generation: allow-all policy plus the sitemap reference.
+[robots]
 
 # Main navigation: home, one collection route, one taxonomy route, and one
 # external URL. Order here is display order.

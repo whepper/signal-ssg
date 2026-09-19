@@ -1,5 +1,7 @@
 //! `signal` command-line interface: ingest, generate, render, write.
 
+#![forbid(unsafe_code)]
+
 use clap::{Parser, Subcommand};
 use miette::IntoDiagnostic;
 use std::path::PathBuf;

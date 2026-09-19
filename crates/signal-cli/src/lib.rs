@@ -13,10 +13,13 @@
 //! and stale pruning are documented in `ARCHITECTURE.md` §13 and
 //! `docs/adr/0016`–`0020`.
 
+#![forbid(unsafe_code)]
+
 pub mod build;
 pub mod config;
 pub mod discover;
 pub mod errors;
+pub mod git;
 pub mod ingest;
 pub mod manifest;
 

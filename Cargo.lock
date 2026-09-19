@@ -362,6 +362,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "either"
+version = "1.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
+
+[[package]]
 name = "entities"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -578,6 +584,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -656,6 +671,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86886cf6dbf4e614b19c9a1eec9775f021869d7eadde0fc73921a81b90c9b4c9"
 dependencies = [
  "memo-map",
+ "percent-encoding",
  "serde",
 ]
 
@@ -732,6 +748,12 @@ name = "owo-colors"
 version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c45bb4a6ae1280ec0803b1ef9d3455eb50f01efbbe1447ab020f1d54fba9d8"
+
+[[package]]
+name = "percent-encoding"
+version = "2.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pkg-config"
@@ -836,6 +858,12 @@ name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
+
+[[package]]
+name = "rustc-hash"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "rustix"
@@ -961,7 +989,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "signal-cli"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "clap",
  "miette",
@@ -980,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "signal-core"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -990,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "signal-generators"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "quick-xml",
  "serde",
@@ -1001,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "signal-markdown"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "comrak",
  "serde",
@@ -1014,11 +1042,13 @@ dependencies = [
 
 [[package]]
 name = "signal-render"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "minijinja",
  "serde",
  "serde_json",
+ "signal-core",
+ "simple-minify-html",
  "thiserror",
 ]
 
@@ -1027,6 +1057,20 @@ name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
+name = "simple-minify-html"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2e14af458c754ee7a0fc21fbb93b824101e2c13a6bd5dc94a32c156a773e36"
+dependencies = [
+ "aho-corasick",
+ "itertools",
+ "memchr",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "slug"

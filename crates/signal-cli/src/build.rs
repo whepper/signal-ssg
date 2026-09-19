@@ -23,9 +23,9 @@
 
 use signal_core::{ArtifactKind, ArtifactSpec, Route, SignalConfig, SiteModel};
 use signal_generators::{
-    collection_summaries, reading_time_minutes, topic_terms, EntryPages, EntrySummary, Generator,
-    Home, MainFeed, Search, SectionIndex, Sitemap, TaxonomyFeeds, TopicSummary, TopicTerms,
-    TopicsIndex,
+    collection_summaries, reading_time_minutes, related_entries, topic_terms, EntryPages,
+    EntrySummary, Generator, Home, MainFeed, Search, SectionIndex, Sitemap, TaxonomyFeeds,
+    TopicSummary, TopicTerms, TopicsIndex,
 };
 use signal_render::{MiniJinjaRenderer, RenderContext, Renderer};
 use std::collections::BTreeSet;
@@ -35,9 +35,10 @@ use crate::discover::write_artifact;
 use crate::errors::{discovery_error, read_file, BuildError};
 use crate::ingest::{ingest_site, path_relative_unix};
 use crate::manifest::{
-    collection_for_section_route, feed_limit, home_template, section_template_for_collection,
-    taxonomy_root, taxonomy_title, template_for_collection, topic_term_template,
-    topics_index_template, HOME_RECENT_LIMIT,
+    collection_for_section_route, feed_identity, feed_limit, home_template, not_found_template,
+    related_limit, section_template_for_collection, section_title, taxonomy_root, taxonomy_title,
+    template_for_collection, topic_term_template, topics_index_template, FeedIdentity,
+    HOME_RECENT_LIMIT,
 };
 
 /// Fixed pipeline lifecycle (ordered, no transitions-encoded state machine).
@@ -427,6 +428,7 @@ fn collect_templates(
 fn entry_context(
     config: &SignalConfig,
     root: &Path,
+    model: &SiteModel,
     entry: &signal_core::ContentEntry,
 ) -> Result<RenderContext, BuildError> {
     use signal_core::{absolute_url, canonical_url, format_date};
@@ -437,6 +439,7 @@ fn entry_context(
     let date_format = config.date_format_str();
     let mut ctx = RenderContext::new();
     ctx.insert("site_title", site_title);
+    insert_site_description(&mut ctx, config);
     if let Some(url) = base_url {
         ctx.insert("base_url", url);
     }
@@ -465,21 +468,17 @@ fn entry_context(
         ctx.insert("author", author);
     }
     if let Some(image) = &entry.image {
-        // URL-path form, matching `og:image`/JSON-LD (which flow through
-        // `absolute_url` → `canonical_url`): a resolved site-root image path
-        // is a path, never an authored URL, so `#`/`?` encode here exactly
-        // as they do in metadata. Absolute (`http(s)://…`) and
-        // protocol-relative (`//…`) values pass through untouched —
-        // encoding them would destroy the scheme.
-        let src = if image.starts_with('/') && !image.starts_with("//") {
-            signal_core::encode_url_path(image)
-        } else {
-            image.clone()
-        };
-        ctx.insert("image", src);
+        ctx.insert("image", signal_core::image_src_url(image));
         if let Some(alt) = &entry.image_alt {
             ctx.insert("image_alt", alt);
         }
+    }
+    // Site-specific front matter survives verbatim: templates read
+    // `extra.<field>` (e.g. `extra.repo`) without engine changes per field.
+    // Absent entirely when the entry defines none, so templates gate with
+    // `{% if extra %}`. BTreeMap keeps key iteration deterministic.
+    if !entry.extra.is_empty() {
+        ctx.insert("extra", &entry.extra);
     }
     ctx.insert("content", &entry.body.html);
     // URL-path form: templates render `route` directly into links, so
@@ -489,8 +488,17 @@ fn entry_context(
     ctx.insert("route", signal_core::encode_route_path(&entry.route));
     ctx.insert("collection", &entry.collection.0);
     ctx.insert("reading_time", reading_time_minutes(entry.body.word_count));
-    let tags: Vec<&String> = entry.tags.iter().collect();
+    // Authored display order (not the canonical sorted set): eyebrows and
+    // "first topic" picks render what the author wrote first.
+    let tags: Vec<&String> = entry.tag_order.iter().collect();
     ctx.insert("tags", &tags);
+    // Related entries: strongest shared-tag overlaps, capped (configurable
+    // via `[related] limit`). Absent when nothing overlaps, so templates
+    // gate with `{% if related %}`. No presentation markup is implied.
+    let related = related_entries(model, entry, related_limit(config), date_format);
+    if !related.is_empty() {
+        ctx.insert("related", &related);
+    }
     // TOC projection over the normalized headings: hierarchy with fragment
     // ids, no HTML involved. Omitted for pages without listable headings so
     // templates render no empty markup.
@@ -570,16 +578,9 @@ fn section_context(
     route: &Route,
 ) -> Result<RenderContext, BuildError> {
     let section_root = model.lookup_by_route(route);
-    let title = section_root
-        .map(|e| e.title.clone())
-        .or_else(|| {
-            config
-                .collections
-                .get(collection)
-                .and_then(|c| c.title.clone())
-        })
-        .filter(|t| !t.trim().is_empty())
-        .unwrap_or_else(|| collection.to_string());
+    // Same title rule the section feed channel uses (shared helper), so the
+    // HTML listing and its feed can never disagree.
+    let title = section_title(config, model, collection, route);
     let description = section_root
         .and_then(|e| e.description.clone())
         .or_else(|| {
@@ -595,6 +596,7 @@ fn section_context(
 
     let mut ctx = RenderContext::new();
     ctx.insert("site_title", site_title);
+    insert_site_description(&mut ctx, config);
     if let Some(url) = base_url {
         ctx.insert("base_url", url);
     }
@@ -603,6 +605,13 @@ fn section_context(
         ctx.insert("description", description);
     }
     ctx.insert("content", &content);
+    // Section-root extras flow to section templates exactly as entry extras
+    // flow to entry templates (e.g. a section `eyebrow`).
+    if let Some(section_root) = section_root {
+        if !section_root.extra.is_empty() {
+            ctx.insert("extra", &section_root.extra);
+        }
+    }
     // URL-path form, like entry pages: safe to render into links directly.
     ctx.insert("route", signal_core::encode_route_path(route));
     ctx.insert("collection", collection);
@@ -615,6 +624,21 @@ fn section_context(
     page_metadata(&mut ctx, config, &title, description.as_deref(), route);
     insert_menus(&mut ctx, config, root, route)?;
     Ok(ctx)
+}
+
+/// Site description for templates (`site_description`): present only when
+/// configured and non-blank. Templates use it as the fallback behind a
+/// page's own `description`. It flows only into template contexts — feeds,
+/// sitemap, and search keep their own fixed channel copy.
+fn insert_site_description(ctx: &mut RenderContext, config: &SignalConfig) {
+    if let Some(description) = config
+        .site
+        .description
+        .as_deref()
+        .filter(|d| !d.trim().is_empty())
+    {
+        ctx.insert("site_description", description);
+    }
 }
 
 /// Shared metadata for non-entry pages (sections, home, taxonomy):
@@ -705,6 +729,7 @@ fn home_context(
     let date_format = config.date_format_str();
     let mut ctx = RenderContext::new();
     ctx.insert("site_title", site_title);
+    insert_site_description(&mut ctx, config);
     if let Some(url) = base_url {
         ctx.insert("base_url", url);
     }
@@ -746,6 +771,7 @@ fn topics_index_context(
     }
     let mut ctx = RenderContext::new();
     ctx.insert("site_title", site_title);
+    insert_site_description(&mut ctx, config);
     if let Some(url) = base_url {
         ctx.insert("base_url", url);
     }
@@ -777,6 +803,7 @@ fn topic_context(
 ) -> Result<RenderContext, BuildError> {
     let mut ctx = RenderContext::new();
     ctx.insert("site_title", site_title);
+    insert_site_description(&mut ctx, config);
     if let Some(url) = base_url {
         ctx.insert("base_url", url);
     }
@@ -933,8 +960,10 @@ pub fn build_site(
     // Feeds are explicit opt-in (`[feed]`) because item selection and caps
     // are editorial choices. They additionally require `site.base_url` for
     // absolute URLs; an explicit-but-unsatisfiable configuration fails the
-    // build rather than silently dropping promised feeds. The sitemap needs
-    // only `base_url` and follows it quietly, like `static/`.
+    // build rather than silently dropping promised feeds. The feed family is
+    // the main feed, one feed per collection (section), and — with a
+    // taxonomy — the label-index feed plus one feed per term. The sitemap
+    // needs only `base_url` and follows it quietly, like `static/`.
     let limit = feed_limit(config);
     if config.feed.is_some() && config.site.base_url.is_none() {
         return Err(BuildError::Model {
@@ -949,6 +978,24 @@ pub fn build_site(
                     message: e.to_string(),
                 })?,
         );
+        // Section feeds: one per configured collection, alongside its HTML
+        // listing (the reference publishes a feed for every section, even
+        // empty ones). `collections` is a BTreeMap: planning order is
+        // deterministic.
+        for name in config.collections.keys() {
+            let prefix = config.route_prefix_for(name);
+            specs.extend(
+                signal_generators::SectionFeeds::new(
+                    signal_core::CollectionId::new(name.clone()),
+                    prefix,
+                    limit,
+                )
+                .generate(model)
+                .map_err(|e| BuildError::Model {
+                    message: e.to_string(),
+                })?,
+            );
+        }
         if let Some(root) = taxonomy_root(config) {
             specs.extend(
                 TaxonomyFeeds::new(root, limit)
@@ -967,6 +1014,27 @@ pub fn build_site(
                     message: e.to_string(),
                 })?,
         );
+    }
+    // robots.txt is explicit opt-in (`[robots]`): a deterministic allow-all
+    // policy plus a sitemap reference when the sitemap is planned.
+    if config.robots.is_some() {
+        specs.extend(
+            signal_generators::Robots::new()
+                .generate(model)
+                .map_err(|e| BuildError::Model {
+                    message: e.to_string(),
+                })?,
+        );
+    }
+    // The themed not-found page is explicit opt-in
+    // (`site.not_found_template`): a fixed `404.html` output rendered from
+    // the named template. It carries no route (the hosting layer serves it
+    // for unknown paths) and consumes no content.
+    if not_found_template(config).is_some() {
+        specs.push(ArtifactSpec::new(
+            "404.html",
+            signal_core::ArtifactKind::NotFound,
+        ));
     }
     // The search index needs no configuration: routes are relative, every
     // site gets the same schema, and there is nothing editorial to tune.
@@ -1176,7 +1244,7 @@ fn resolve_html_artifact(
                 })?;
             (
                 template_for_collection(config, &entry.collection.0),
-                entry_context(config, root, entry)?,
+                entry_context(config, root, model, entry)?,
             )
         }
         ArtifactKind::CollectionIndex => {
@@ -1289,17 +1357,43 @@ pub fn resolve_artifact(
         ArtifactKind::SearchIndex => {
             Ok(signal_generators::search::search_index_json(model).into_bytes())
         }
+        ArtifactKind::Robots => {
+            Ok(signal_generators::robots::robots_txt(config.site.base_url.as_deref()).into_bytes())
+        }
+        ArtifactKind::NotFound => Ok(finalize_html(
+            config,
+            resolve_not_found(config, root, renderer)?,
+        )),
         ArtifactKind::Static => resolve_static_artifact(root, spec),
-        _ => resolve_html_artifact(spec, config, root, model, renderer).map(String::into_bytes),
+        _ => Ok(finalize_html(
+            config,
+            resolve_html_artifact(spec, config, root, model, renderer)?,
+        )),
+    }
+}
+
+/// Apply opt-in HTML minification to a finished rendered page.
+///
+/// This is the `template rendering → rendered HTML → HTML minification →
+/// artifact/output` boundary: only template-rendered HTML strings pass
+/// through here (entry pages, listings, home, taxonomy, the themed 404).
+/// Feeds, sitemap, the search index, robots.txt, and static files never
+/// reach this function, so `[output] minify_html` cannot touch them. Off by
+/// default, in which case the rendered string passes through byte-identical.
+fn finalize_html(config: &SignalConfig, html: String) -> Vec<u8> {
+    if config.minify_html() {
+        signal_render::minify_html(&html).into_bytes()
+    } else {
+        html.into_bytes()
     }
 }
 
 /// Resolve one RSS artifact from the model (never from generated HTML).
 ///
-/// `index.xml` is the main feed; `<root>/<slug>/index.xml` is the matching
-/// term feed, located through the same [`TopicSummary`] routes the term
-/// pages use. Feed projections are reconstructed from config, so this
-/// function is self-contained.
+/// The path's [`FeedIdentity`] (shared with manifest recording) decides
+/// which feed this is: main, section, taxonomy label-index, or term. Feed
+/// projections are reconstructed from config, so this function is
+/// self-contained.
 fn resolve_feed(
     config: &SignalConfig,
     model: &SiteModel,
@@ -1307,7 +1401,7 @@ fn resolve_feed(
 ) -> Result<String, BuildError> {
     use signal_core::canonical_url;
     use signal_generators::rss::{
-        channel_xml, main_channel_meta, newest_pub_date, term_channel_meta,
+        channel_xml, main_channel_meta, newest_pub_date, scoped_channel_meta,
     };
 
     let base = config
@@ -1327,39 +1421,72 @@ fn resolve_feed(
         base.trim_end_matches('/'),
         signal_core::encode_url_path(&spec.path)
     );
-    if spec.path == "index.xml" {
-        let items = MainFeed::new(limit).items(model, base);
-        let (title, description) = main_channel_meta(&config.site.title);
-        let link = canonical_url(base, &Route::new("/".to_string()));
-        return Ok(channel_xml(
-            &title,
-            &link,
-            &description,
-            &self_url,
-            newest_pub_date(&items),
-            &items,
-        ));
-    }
-    let tax_root = taxonomy_root(config).ok_or_else(|| BuildError::Model {
-        message: format!(
-            "feed artifact {:?} without taxonomy feed configuration",
-            spec.path
-        ),
+    let identity = feed_identity(&spec.path, config).ok_or_else(|| BuildError::Model {
+        message: format!("unrecognized feed path {:?}", spec.path),
     })?;
-    let terms = topic_terms(model, &tax_root, signal_core::DEFAULT_DATE_FORMAT).map_err(|e| {
-        BuildError::Model {
-            message: e.to_string(),
+    let (items, scope, link) = match identity {
+        FeedIdentity::Main => {
+            let items = MainFeed::new(limit).items(model, base);
+            (
+                items,
+                None,
+                canonical_url(base, &Route::new("/".to_string())),
+            )
         }
-    })?;
-    let term = terms
-        .iter()
-        .find(|t| format!("{}/index.xml", t.route.trim_matches('/')) == spec.path)
-        .ok_or_else(|| BuildError::Model {
-            message: format!("no topic for feed {:?}", spec.path),
-        })?;
-    let items = TaxonomyFeeds::new(tax_root, limit).term_items(model, &term.label, base);
-    let (title, description) = term_channel_meta(&term.label, &config.site.title);
-    let link = canonical_url(base, &Route::new(term.route.clone()));
+        FeedIdentity::Section { collection } => {
+            let route = Route::new(config.route_prefix_for(&collection));
+            let items = signal_generators::SectionFeeds::new(
+                signal_core::CollectionId::new(collection.clone()),
+                route.0.clone(),
+                limit,
+            )
+            .items(model, base);
+            let scope = section_title(config, model, &collection, &route);
+            (items, Some(scope), canonical_url(base, &route))
+        }
+        FeedIdentity::TaxonomyLabels => {
+            let root = taxonomy_root(config).ok_or_else(|| BuildError::Model {
+                message: format!("label feed artifact {:?} without taxonomy", spec.path),
+            })?;
+            let items = TaxonomyFeeds::new(root.clone(), limit).label_items(model, base);
+            let route = Route::new(root);
+            (
+                items,
+                Some(taxonomy_title(config)),
+                canonical_url(base, &route),
+            )
+        }
+        FeedIdentity::Term { slug } => {
+            let root = taxonomy_root(config).ok_or_else(|| BuildError::Model {
+                message: format!(
+                    "feed artifact {:?} without taxonomy feed configuration",
+                    spec.path
+                ),
+            })?;
+            let terms =
+                topic_terms(model, &root, signal_core::DEFAULT_DATE_FORMAT).map_err(|e| {
+                    BuildError::Model {
+                        message: e.to_string(),
+                    }
+                })?;
+            let term = terms
+                .iter()
+                .find(|t| t.slug == slug)
+                .ok_or_else(|| BuildError::Model {
+                    message: format!("no topic for feed {:?}", spec.path),
+                })?;
+            let items = TaxonomyFeeds::new(root, limit).term_items(model, &term.label, base);
+            (
+                items,
+                Some(term.label.clone()),
+                canonical_url(base, &Route::new(term.route.clone())),
+            )
+        }
+    };
+    let (title, description) = match scope {
+        None => main_channel_meta(&config.site.title),
+        Some(scope) => scoped_channel_meta(&scope, &config.site.title),
+    };
     Ok(channel_xml(
         &title,
         &link,
@@ -1368,6 +1495,36 @@ fn resolve_feed(
         newest_pub_date(&items),
         &items,
     ))
+}
+
+/// Resolve the themed not-found page (`404.html`).
+///
+/// Site-level context only: `site_title`, `base_url`, and navigation with
+/// no active state (an error page is served for unknown paths, so no
+/// internal menu destination matches). No canonical URL, OpenGraph, or
+/// JSON-LD is fabricated — the page is not a route.
+fn resolve_not_found(
+    config: &SignalConfig,
+    root: &Path,
+    renderer: &MiniJinjaRenderer,
+) -> Result<String, BuildError> {
+    let template = not_found_template(config).ok_or_else(|| BuildError::Model {
+        message: "404 artifact without not-found template configuration".to_string(),
+    })?;
+    let mut ctx = RenderContext::new();
+    ctx.insert("site_title", &config.site.title);
+    insert_site_description(&mut ctx, config);
+    if let Some(url) = config.site.base_url.as_deref() {
+        ctx.insert("base_url", url);
+    }
+    // Menus resolve against the artifact's own output-shaped path: never
+    // an internal menu route, so every item renders inactive.
+    insert_menus(&mut ctx, config, root, &Route::new("/404.html".to_string()))?;
+    renderer
+        .render(&template, &ctx)
+        .map_err(|e| BuildError::Render {
+            message: format!("template {template:?} for 404 page: {e}"),
+        })
 }
 
 /// Resolve the sitemap from the explicit public route inventory: entry
@@ -1492,6 +1649,542 @@ mod tests {
         // Pages without listable headings omit the TOC entirely.
         let plain = fs::read_to_string(out.join("posts/b/index.html")).expect("output");
         assert!(!plain.contains("<nav>"), "got: {plain}");
+    }
+
+    #[test]
+    fn site_specific_front_matter_reaches_templates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n",
+                ),
+                (
+                    "content/posts/a.md",
+                    "---\ntitle: A\nrepo: example-repo\ntoc: true\nnested:\n  depth: 2\n---\n\nBody.\n",
+                ),
+                (
+                    "content/posts/plain.md",
+                    "---\ntitle: Plain\n---\n\nNo extras.\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html><body>{% if extra %}repo={{ extra.repo }}|depth={{ extra.nested.depth }}{% else %}no-extra{% endif %}{{ content | safe }}</body></html>",
+                ),
+                ("templates/section.html", "<html><body>section</body></html>"),
+            ],
+        );
+        let out = dir.path().join("out");
+        build_site_from_disk(dir.path(), &out).expect("builds");
+        let html = fs::read_to_string(out.join("posts/a/index.html")).expect("output");
+        assert!(html.contains("repo=example-repo"), "got: {html}");
+        assert!(html.contains("depth=2"), "got: {html}");
+        // The boolean field reaches templates as a real boolean; rendering
+        // truthiness works even though Display spelling is engine-owned.
+        assert!(html.contains("repo="), "got: {html}");
+        // Entries without extras omit the key entirely.
+        let plain = fs::read_to_string(out.join("posts/plain/index.html")).expect("output");
+        assert!(plain.contains("no-extra"), "got: {plain}");
+    }
+
+    #[test]
+    fn template_tags_follow_authored_order() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n",
+                ),
+                (
+                    "content/posts/a.md",
+                    "---\ntitle: A\ntopics: [Zulu, Alpha]\ntags: [Mike]\n---\n\nBody.\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html><body>{% for t in tags %}[{{ t }}]{% endfor %}</body></html>",
+                ),
+                (
+                    "templates/section.html",
+                    "<html><body>{% for e in entries %}{% for t in e.tags %}[{{ t }}]{% endfor %}{% endfor %}</body></html>",
+                ),
+            ],
+        );
+        let out = dir.path().join("out");
+        build_site_from_disk(dir.path(), &out).expect("builds");
+        // Entry page and section listing both render the authored order,
+        // not the canonical sorted set.
+        let html = fs::read_to_string(out.join("posts/a/index.html")).expect("output");
+        assert!(html.contains("[Zulu][Alpha][Mike]"), "got: {html}");
+        let section = fs::read_to_string(out.join("posts/index.html")).expect("output");
+        assert!(section.contains("[Zulu][Alpha][Mike]"), "got: {section}");
+    }
+
+    #[test]
+    fn site_description_reaches_templates_with_page_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\ndescription = \"Site summary.\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n",
+                ),
+                (
+                    "content/posts/a.md",
+                    "---\ntitle: A\ndescription: Page summary.\n---\n\nBody.\n",
+                ),
+                (
+                    "content/posts/plain.md",
+                    "---\ntitle: Plain\n---\n\nNo page description.\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html><head><meta name=\"description\" content=\"{{ description | default(site_description) }}\"></head><body></body></html>",
+                ),
+                (
+                    "templates/section.html",
+                    "<html><head><meta name=\"description\" content=\"{{ description | default(site_description) }}\"></head><body></body></html>",
+                ),
+            ],
+        );
+        let out = dir.path().join("out");
+        build_site_from_disk(dir.path(), &out).expect("builds");
+        // A page description wins over the site fallback.
+        let html = fs::read_to_string(out.join("posts/a/index.html")).expect("output");
+        assert!(
+            html.contains("<meta name=\"description\" content=\"Page summary.\">"),
+            "got: {html}"
+        );
+        // Without one, the site description fills the gap — on entry and
+        // section pages alike.
+        let plain = fs::read_to_string(out.join("posts/plain/index.html")).expect("output");
+        assert!(
+            plain.contains("<meta name=\"description\" content=\"Site summary.\">"),
+            "got: {plain}"
+        );
+        let section = fs::read_to_string(out.join("posts/index.html")).expect("output");
+        assert!(
+            section.contains("<meta name=\"description\" content=\"Site summary.\">"),
+            "got: {section}"
+        );
+    }
+
+    #[test]
+    fn site_description_change_rebuilds_config_dependents_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\nbase_url = \"https://example.com/\"\ndescription = \"Before.\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n",
+                ),
+                (
+                    "content/posts/a.md",
+                    "---\ntitle: A\ndate: 2026-01-01\n---\n\nA body.\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html><body>{{ site_description }}</body></html>",
+                ),
+                (
+                    "templates/section.html",
+                    "<html><body>section</body></html>",
+                ),
+            ],
+        );
+        let out = dir.path().join("out");
+        build_site_from_disk(dir.path(), &out).expect("first builds");
+        fs::write(
+            dir.path().join("signal.toml"),
+            "[site]\ntitle = \"T\"\nbase_url = \"https://example.com/\"\ndescription = \"After.\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n",
+        )
+        .expect("edit");
+        let summary = build_site_from_disk(dir.path(), &out).expect("rebuilds");
+        let mut rebuilt = summary.rebuilt_paths.clone();
+        rebuilt.sort();
+        // Template-rendered artifacts name `Config`, so they rebuild; the
+        // search index names only its query and stays reused.
+        assert!(
+            rebuilt.contains(&"posts/a/index.html".to_string()),
+            "{rebuilt:?}"
+        );
+        assert!(
+            rebuilt.contains(&"posts/index.html".to_string()),
+            "{rebuilt:?}"
+        );
+        assert!(!rebuilt.contains(&"index.json".to_string()), "{rebuilt:?}");
+        let html = fs::read_to_string(out.join("posts/a/index.html")).expect("output");
+        assert!(html.contains("After."), "got: {html}");
+    }
+
+    #[test]
+    fn related_entries_reach_entry_templates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n",
+                ),
+                (
+                    "content/posts/a.md",
+                    "---\ntitle: A\ntopics: [Rust, Systems]\ndate: 2026-01-01\n---\n\nA.\n",
+                ),
+                (
+                    "content/posts/b.md",
+                    "---\ntitle: B\ntopics: [Rust]\ndate: 2026-02-02\n---\n\nB.\n",
+                ),
+                (
+                    "content/posts/c.md",
+                    "---\ntitle: C\ntopics: [Unrelated]\ndate: 2026-03-03\n---\n\nC.\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html><body>{% if related %}{% for r in related %}[{{ r.title }}]{% endfor %}{% else %}no-related{% endif %}</body></html>",
+                ),
+                ("templates/section.html", "<html><body>section</body></html>"),
+            ],
+        );
+        let out = dir.path().join("out");
+        build_site_from_disk(dir.path(), &out).expect("builds");
+        // A's page lists B (topic overlap), never the unrelated C.
+        let a = fs::read_to_string(out.join("posts/a/index.html")).expect("output");
+        assert!(a.contains("[B]"), "got: {a}");
+        assert!(!a.contains("[C]"), "got: {a}");
+        // C shares nothing, so its page has no related block at all.
+        let c = fs::read_to_string(out.join("posts/c/index.html")).expect("output");
+        assert!(c.contains("no-related"), "got: {c}");
+    }
+
+    #[test]
+    fn mermaid_gate_and_source_fallback_are_per_page() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n",
+                ),
+                (
+                    "content/posts/diagram.md",
+                    "---\ntitle: Diagram\n---\n\n```mermaid\nflowchart LR\n    A --> B\n```\n",
+                ),
+                (
+                    "content/posts/plain.md",
+                    "---\ntitle: Plain\n---\n\n```rust\nfn main() {}\n```\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html><body>{% if has_mermaid %}mermaid-on{% else %}mermaid-off{% endif %}{{ content | safe }}</body></html>",
+                ),
+                ("templates/section.html", "<html><body>section</body></html>"),
+            ],
+        );
+        let out = dir.path().join("out");
+        build_site_from_disk(dir.path(), &out).expect("builds");
+        // The diagram page gates the loader on and carries the no-JS
+        // source fallback.
+        let diagram = fs::read_to_string(out.join("posts/diagram/index.html")).expect("output");
+        assert!(diagram.contains("mermaid-on"), "got: {diagram}");
+        assert!(
+            diagram.contains("<pre class=\"mermaid\">flowchart LR"),
+            "got: {diagram}"
+        );
+        assert!(
+            diagram.contains("<summary>View diagram source</summary>"),
+            "got: {diagram}"
+        );
+        // A highlighted-but-not-Mermaid page keeps the loader off.
+        let plain = fs::read_to_string(out.join("posts/plain/index.html")).expect("output");
+        assert!(plain.contains("mermaid-off"), "got: {plain}");
+        assert!(!plain.contains("mermaid-on"), "got: {plain}");
+        assert!(!plain.contains("mermaid-source"), "got: {plain}");
+    }
+
+    #[test]
+    fn section_label_robots_and_not_found_generate() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\nbase_url = \"https://example.com/\"\nnot_found_template = \"error.html\"\n[taxonomy]\nroute_prefix = \"/topics/\"\n[feed]\n[robots]\n[menus.main]\nitems = [{ label = \"Posts\", url = \"/posts/\" }]\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n[collections.empty]\nsource = \"content/empty\"\nroute_prefix = \"/empty/\"\n",
+                ),
+                (
+                    "content/posts/a.md",
+                    "---\ntitle: A\ndate: 2026-02-01\ntopics: [\"Rust\"]\ndescription: About A.\n---\n\nA body.\n",
+                ),
+                (
+                    "content/posts/_index.md",
+                    "---\ntitle: Articles\n---\n\nLanding.\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html><body>{{ content | safe }}</body></html>",
+                ),
+                (
+                    "templates/section.html",
+                    "<html><body>section {{ title }}</body></html>",
+                ),
+                ("templates/topics.html", "<html><body>topics</body></html>"),
+                ("templates/topic.html", "<html><body>topic</body></html>"),
+                (
+                    "templates/error.html",
+                    "<html><body>404 for {{ site_title }}{% if menus %} nav:{% for m in menus.main %}{{ m.label }}{% if m.active %}!ACTIVE{% endif %}{% endfor %}{% endif %}</body></html>",
+                ),
+            ],
+        );
+        let out = dir.path().join("out");
+        let summary = build_site_from_disk(dir.path(), &out).expect("builds");
+        let planned: BTreeSet<String> = summary.specs.iter().map(|s| s.path.clone()).collect();
+        for feed in ["posts/index.xml", "empty/index.xml", "topics/index.xml"] {
+            assert!(planned.contains(feed), "planned feeds: {planned:?}");
+        }
+        assert!(planned.contains("robots.txt"), "planned: {planned:?}");
+        assert!(planned.contains("404.html"), "planned: {planned:?}");
+
+        // Section feed: scoped channel copy from the section title rule
+        // (the `_index.md` title wins), items from collection membership.
+        let posts_feed = fs::read_to_string(out.join("posts/index.xml")).expect("section feed");
+        assert!(
+            posts_feed.contains("<title>Articles on T</title>"),
+            "{posts_feed}"
+        );
+        assert!(
+            posts_feed.contains("<link>https://example.com/posts/</link>"),
+            "{posts_feed}"
+        );
+        assert!(
+            posts_feed.contains("https://example.com/posts/a/"),
+            "{posts_feed}"
+        );
+        assert!(posts_feed.contains("About A."), "{posts_feed}");
+
+        // A collection with no regular entries still publishes a feed
+        // (empty item list), matching the reference.
+        let empty_feed = fs::read_to_string(out.join("empty/index.xml")).expect("empty feed");
+        assert!(
+            empty_feed.contains("<title>empty on T</title>"),
+            "{empty_feed}"
+        );
+        assert!(!empty_feed.contains("<item>"), "{empty_feed}");
+        assert!(!empty_feed.contains("<lastBuildDate"), "{empty_feed}");
+
+        // Taxonomy label feed: one item per term, linked to the term,
+        // timestamped with the newest member's date.
+        let labels = fs::read_to_string(out.join("topics/index.xml")).expect("label feed");
+        assert!(labels.contains("<title>Topics on T</title>"), "{labels}");
+        assert!(
+            labels.contains("<link>https://example.com/topics/</link>"),
+            "{labels}"
+        );
+        assert!(labels.contains("<title>Rust</title>"), "{labels}");
+        assert!(
+            labels.contains("https://example.com/topics/rust/"),
+            "{labels}"
+        );
+        assert!(
+            labels.contains("Sun, 01 Feb 2026 00:00:00 +0000"),
+            "{labels}"
+        );
+
+        // robots.txt: fixed allow-all policy plus the sitemap reference.
+        let robots = fs::read_to_string(out.join("robots.txt")).expect("robots");
+        assert_eq!(
+            robots,
+            "User-agent: *\nAllow: /\nSitemap: https://example.com/sitemap.xml\n"
+        );
+
+        // Themed 404: rendered from the configured template with site
+        // chrome; menus resolve inactive (no route matches an error page)
+        // and no canonical URL is fabricated.
+        let not_found = fs::read_to_string(out.join("404.html")).expect("404");
+        assert!(not_found.contains("404 for T nav:Posts"), "{not_found}");
+        assert!(!not_found.contains("ACTIVE"), "{not_found}");
+        assert!(!not_found.contains("canonical"), "{not_found}");
+    }
+
+    #[test]
+    fn special_artifacts_invalidate_only_on_their_inputs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\nbase_url = \"https://example.com/\"\nnot_found_template = \"error.html\"\n[feed]\n[robots]\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n",
+                ),
+                (
+                    "content/posts/a.md",
+                    "---\ntitle: A\ndate: 2026-01-01\n---\n\nA body.\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html><body>{{ content | safe }}</body></html>",
+                ),
+                (
+                    "templates/section.html",
+                    "<html><body>section</body></html>",
+                ),
+                ("templates/error.html", "<html><body>404</body></html>"),
+            ],
+        );
+        let out = dir.path().join("out");
+        build_site_from_disk(dir.path(), &out).expect("first builds");
+
+        // A content edit leaves robots.txt and 404.html reused: neither
+        // consumes entries or queries.
+        fs::write(
+            dir.path().join("content/posts/a.md"),
+            "---\ntitle: A Two\ndate: 2026-01-01\n---\n\nA body.\n",
+        )
+        .expect("edit");
+        let summary = build_site_from_disk(dir.path(), &out).expect("rebuilds");
+        assert!(
+            !summary.rebuilt_paths.contains(&"robots.txt".to_string()),
+            "{:?}",
+            summary.rebuilt_paths
+        );
+        assert!(
+            !summary.rebuilt_paths.contains(&"404.html".to_string()),
+            "{:?}",
+            summary.rebuilt_paths
+        );
+        assert!(summary
+            .rebuilt_paths
+            .contains(&"posts/a/index.html".to_string()));
+
+        // A template change rebuilds the 404 (it renders through the
+        // template set) but not robots.txt (config-only input).
+        fs::write(
+            dir.path().join("templates/error.html"),
+            "<html><body>404 changed</body></html>",
+        )
+        .expect("edit");
+        let summary = build_site_from_disk(dir.path(), &out).expect("rebuilds");
+        assert!(
+            summary.rebuilt_paths.contains(&"404.html".to_string()),
+            "{:?}",
+            summary.rebuilt_paths
+        );
+        assert!(
+            !summary.rebuilt_paths.contains(&"robots.txt".to_string()),
+            "{:?}",
+            summary.rebuilt_paths
+        );
+    }
+
+    #[test]
+    fn html_minification_is_opt_in_rebuilds_html_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base_config = "[site]\ntitle = \"T\"\nbase_url = \"https://example.com/\"\nnot_found_template = \"error.html\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n";
+        write_site(
+            dir.path(),
+            &[
+                ("signal.toml", base_config),
+                (
+                    "content/posts/a.md",
+                    "---\ntitle: A\ndescription: About A.\n---\n\nHello body.\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html>\n  <head>\n    <title>{{ title }}</title>\n  </head>\n  <body>\n    <h1>{{ title }}</h1>\n    {{ content | safe }}\n  </body>\n</html>",
+                ),
+                (
+                    "templates/section.html",
+                    "<html>\n  <body>\n    <h1>{{ title }}</h1>\n  </body>\n</html>",
+                ),
+                ("templates/error.html", "<html>\n  <body>Nothing here.</body>\n</html>"),
+                ("static/app.js", "console.log( 1 );\n"),
+            ],
+        );
+        let out = dir.path().join("out");
+        build_site_from_disk(dir.path(), &out).expect("first builds");
+
+        // Disabled by default: template formatting whitespace survives.
+        let plain = fs::read_to_string(out.join("posts/a/index.html")).expect("output");
+        assert!(plain.contains("<html>\n  <head>"), "got: {plain}");
+        let plain_section = fs::read_to_string(out.join("posts/index.html")).expect("section");
+        let plain_search = fs::read(out.join("index.json")).expect("search");
+        let plain_static = fs::read(out.join("app.js")).expect("static");
+        let plain_404 = fs::read_to_string(out.join("404.html")).expect("404");
+
+        // Opt in: only the flag changes.
+        fs::write(
+            dir.path().join("signal.toml"),
+            format!("{base_config}[output]\nminify_html = true\n"),
+        )
+        .expect("edit");
+        let summary = build_site_from_disk(dir.path(), &out).expect("rebuilds");
+        let mut rebuilt = summary.rebuilt_paths.clone();
+        rebuilt.sort();
+        // Every template-rendered HTML artifact rebuilds (page, section, 404
+        // all name Config); the search index and static files stay reused.
+        for path in ["posts/a/index.html", "posts/index.html", "404.html"] {
+            assert!(rebuilt.contains(&path.to_string()), "{rebuilt:?}");
+        }
+        assert!(!rebuilt.contains(&"index.json".to_string()), "{rebuilt:?}");
+        assert!(!rebuilt.contains(&"app.js".to_string()), "{rebuilt:?}");
+
+        // Minified HTML is smaller but keeps its content.
+        let min = fs::read_to_string(out.join("posts/a/index.html")).expect("output");
+        assert!(min.len() < plain.len(), "{} -> {}", plain.len(), min.len());
+        assert!(min.contains("Hello body."), "got: {min}");
+        assert!(min.contains("<title>A</title>"), "got: {min}");
+        let min_section = fs::read_to_string(out.join("posts/index.html")).expect("section");
+        assert!(min_section.len() < plain_section.len());
+        let min_404 = fs::read_to_string(out.join("404.html")).expect("404");
+        assert!(min_404.len() < plain_404.len());
+        assert!(min_404.contains("Nothing here."), "got: {min_404}");
+
+        // Non-HTML artifacts are byte-identical.
+        assert_eq!(
+            fs::read(out.join("index.json")).expect("search"),
+            plain_search
+        );
+        assert_eq!(fs::read(out.join("app.js")).expect("static"), plain_static);
+
+        // A second minified build reuses everything.
+        let summary = build_site_from_disk(dir.path(), &out).expect("rebuilds");
+        assert_eq!(summary.rebuilt, 0, "{:?}", summary.rebuilt_paths);
+        assert_eq!(summary.reused, summary.specs.len());
+    }
+
+    #[test]
+    fn robots_without_base_url_omits_the_sitemap_reference() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\n[robots]\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n",
+                ),
+                ("content/posts/a.md", "---\ntitle: A\n---\n\nA body.\n"),
+                (
+                    "templates/post.html",
+                    "<html><body>{{ content | safe }}</body></html>",
+                ),
+                (
+                    "templates/section.html",
+                    "<html><body>section</body></html>",
+                ),
+            ],
+        );
+        let out = dir.path().join("out");
+        build_site_from_disk(dir.path(), &out).expect("builds");
+        let robots = fs::read_to_string(out.join("robots.txt")).expect("robots");
+        assert_eq!(robots, "User-agent: *\nAllow: /\n");
+        // No sitemap artifact exists without a base URL either.
+        assert!(!out.join("sitemap.xml").exists());
     }
 
     fn write_site(dir: &Path, files: &[(&str, &str)]) {
@@ -2503,7 +3196,11 @@ mod tests {
 
         // Alpha's title changes: entry digest, summaries, home, topic
         // terms, feeds, and search all embed it. The sitemap records only
-        // routes and lastmod dates, so it must stay reusable.
+        // routes and lastmod dates, so it must stay reusable. Beta's page
+        // lists Alpha as related, and the related projection embeds the
+        // title, so it rebuilds too. The posts section feed lists Alpha
+        // (title flows into items), while the label feed (term titles and
+        // dates only) and the other collection's feed stay reused.
         fs::write(
             dir.path().join("content/posts/alpha.md"),
             "---\ntitle: Alpha Renamed\ndate: 2026-02-01\ndescription: About A.\ntopics: [\"Rust\"]\n---\n\nAlpha body words here.\n",
@@ -2519,7 +3216,9 @@ mod tests {
                 "index.json",
                 "index.xml",
                 "posts/alpha/index.html",
+                "posts/beta/index.html",
                 "posts/index.html",
+                "posts/index.xml",
                 "topics/index.html",
                 "topics/rust/index.html",
                 "topics/rust/index.xml",
@@ -2535,9 +3234,10 @@ mod tests {
         build_site_from_disk(dir.path(), &out).expect("first builds");
 
         // Beta has no description, so feeds carry its body excerpt: the body
-        // edit must reach the page, search, and both feeds containing beta —
-        // but summaries embed no body text (reading time stays 1 minute), so
-        // listings, terms, topics index, and sitemap stay reusable.
+        // edit must reach the page, search, and every feed containing beta —
+        // main, term, and its section feed — but summaries embed no body
+        // text (reading time stays 1 minute), so listings, terms, topics
+        // index, label feed, and sitemap stay reusable.
         fs::write(
             dir.path().join("content/posts/beta.md"),
             "---\ntitle: Beta\ndate: 2026-01-01\ntopics: [\"Rust\"]\n---\n\nBeta body with extra words here.\n",
@@ -2552,6 +3252,7 @@ mod tests {
                 "index.json",
                 "index.xml",
                 "posts/beta/index.html",
+                "posts/index.xml",
                 "topics/rust/index.xml",
             ]
         );
@@ -2565,10 +3266,14 @@ mod tests {
         build_site_from_disk(dir.path(), &out).expect("first builds");
 
         // Beta gains Systems: its page, posts listing, home, topics index,
-        // both affected term pages, the new Systems term feed, search (tags
+        // both affected term pages, the label feed (the new Systems entry
+        // joins its term list), the new Systems term feed, search (tags
         // are indexed), and the sitemap (the new term route joins the
         // inventory) rebuild. The main feed carries no tags, so it stays
-        // reusable — precision the manifest model gives for free.
+        // reusable — precision the manifest model gives for free. Alpha's
+        // page lists Beta as related, and Beta's summary tags changed, so
+        // it rebuilds too; Note shares nothing and stays reused, and the
+        // posts section feed (items carry no tags) stays reused as well.
         fs::write(
             dir.path().join("content/posts/beta.md"),
             "---\ntitle: Beta\ndate: 2026-01-01\ntopics: [\"Rust\", \"Systems\"]\n---\n\nBeta body words here.\n",
@@ -2582,10 +3287,12 @@ mod tests {
             vec![
                 "index.html",
                 "index.json",
+                "posts/alpha/index.html",
                 "posts/beta/index.html",
                 "posts/index.html",
                 "sitemap.xml",
                 "topics/index.html",
+                "topics/index.xml",
                 "topics/rust/index.html",
                 "topics/systems/index.html",
                 "topics/systems/index.xml",
@@ -2603,8 +3310,11 @@ mod tests {
         let out = dir.path().join("out");
         build_site_from_disk(dir.path(), &out).expect("first builds");
 
-        // Beta moves to newest: its page, every date-ordered listing, both
-        // feeds, search, and the sitemap (date is the lastmod fallback).
+        // Beta moves to newest: its page, every date-ordered listing, every
+        // feed whose membership or ordering changes, search, the sitemap
+        // (date is the lastmod fallback), and the label feed (the Rust
+        // term's newest-member date moved). Alpha's page lists Beta as
+        // related, and Beta's summary date changed, so it rebuilds too.
         fs::write(
             dir.path().join("content/posts/beta.md"),
             "---\ntitle: Beta\ndate: 2026-05-01\ntopics: [\"Rust\"]\n---\n\nBeta body words here.\n",
@@ -2619,10 +3329,13 @@ mod tests {
                 "index.html",
                 "index.json",
                 "index.xml",
+                "posts/alpha/index.html",
                 "posts/beta/index.html",
                 "posts/index.html",
+                "posts/index.xml",
                 "sitemap.xml",
                 "topics/index.html",
+                "topics/index.xml",
                 "topics/rust/index.html",
                 "topics/rust/index.xml",
             ]
@@ -2942,7 +3655,8 @@ mod tests {
         build_site_from_disk(dir.path(), &out).expect("first builds");
 
         // Gamma is old, untagged, and undescribed: it joins listings, home,
-        // search, main feed, and sitemap — nothing taxonomy-related.
+        // search, main feed, its section feed, and sitemap — nothing
+        // taxonomy-related (term pages and the label feed stay reused).
         fs::write(
             dir.path().join("content/posts/gamma.md"),
             "---\ntitle: Gamma\ndate: 2026-01-02\n---\n\nGamma body.\n",
@@ -2959,6 +3673,7 @@ mod tests {
                 "index.xml",
                 "posts/gamma/index.html",
                 "posts/index.html",
+                "posts/index.xml",
                 "sitemap.xml",
             ]
         );

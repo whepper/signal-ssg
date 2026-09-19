@@ -139,23 +139,30 @@ fn sample_fixture_builds_all_slice_pages() {
     let summary = build_site_from_disk(&root, dir.path()).expect("build succeeds");
     // 3 entry pages (section roots render as sections, the draft is skipped)
     // + 3 section pages + the home page + 1 topics index + 2 term pages
-    // + 1 main feed + 2 term feeds + 1 sitemap + 1 search index
+    // + 1 main feed + 3 section feeds + 1 label feed + 2 term feeds
+    // + 1 sitemap + 1 search index + 1 robots.txt + 1 themed 404
     // + 2 static assets (hero SVG + mermaid stub).
     // The draft-only topic never produces a page.
-    assert_eq!(summary.pages_written, 17);
+    assert_eq!(summary.pages_written, 23);
     assert_eq!(summary.drafts_skipped, 1);
     for rel in [
         "index.html",
         "index.xml",
         "index.json",
         "sitemap.xml",
+        "robots.txt",
+        "404.html",
         "posts/index.html",
+        "posts/index.xml",
         "posts/alpha/index.html",
         "posts/beta/index.html",
         "projects/index.html",
+        "projects/index.xml",
         "projects/gadget/index.html",
         "notes/index.html",
+        "notes/index.xml",
         "topics/index.html",
+        "topics/index.xml",
         "topics/rust/index.html",
         "topics/rust/index.xml",
         "topics/systems/index.html",

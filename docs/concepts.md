@@ -30,7 +30,9 @@ Signal ingests and validates source material, then freezes an immutable site mod
 
 Generators plan lightweight artifact specifications. Later stages resolve and write them.
 
-Artifacts can be pages, section indexes, taxonomy pages, RSS feeds, a sitemap, a search index, or static files.
+Artifacts can be pages, section indexes, taxonomy pages, RSS feeds (main,
+section, taxonomy-label index, and per-term), a sitemap, a robots file, a
+search index, a themed not-found page, or static files.
 
 ## Determinism
 

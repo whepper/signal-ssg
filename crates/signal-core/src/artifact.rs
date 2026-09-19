@@ -31,6 +31,15 @@ pub enum ArtifactKind {
     SearchIndex,
     /// Static passthrough (copied verbatim from `static/`).
     Static,
+    /// `robots.txt`, derived from configuration (base URL). Not a route:
+    /// crawlers fetch it at a fixed path, so it is planned and resolved
+    /// like the sitemap but with its own content rules.
+    Robots,
+    /// The themed not-found page (`404.html`). Rendered through the
+    /// template pipeline from site-level context, but deliberately routeless:
+    /// the hosting layer serves it for unknown paths, so it carries no
+    /// canonical URL and no active menu state.
+    NotFound,
 }
 
 /// Lightweight plan for one output file.

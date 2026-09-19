@@ -89,10 +89,18 @@ tags, and the home hero. See also the <a href="/posts/beta/">beta post</a>.</p>
 </span></code></pre><button type="button" class="code-block-copy" data-code-copy>Copy</button></div>
 <div class="code-block"><pre><code><span class="text plain">Plain fences render without language hooks.
 </span></code></pre><button type="button" class="code-block-copy" data-code-copy>Copy</button></div>
+<figure class="mermaid-container">
 <pre class="mermaid">flowchart LR
     A[&quot;Start &amp; go&quot;] --&gt; B{&quot;Choose &lt;option&gt;&quot;}
     B --&gt; C[&quot;Done&quot;]</pre>
-<aside class="alert alert-warning" data-alert="warning">
+<details class="mermaid-source">
+<summary>View diagram source</summary>
+<pre><code>flowchart LR
+    A[&quot;Start &amp; go&quot;] --&gt; B{&quot;Choose &lt;option&gt;&quot;}
+    B --&gt; C[&quot;Done&quot;]</code></pre>
+</details>
+</figure>
+<aside class="alert alert-warning" data-alert="warning" role="alert">
 <p class="alert-title">Warning</p>
 <p>
 Do not run untrusted snippets. Review <strong>every</strong> line before executing,
@@ -102,7 +110,7 @@ especially piped <code>curl</code> installers.</p>
 <li>Check hashes where published.</li>
 </ul>
 </aside>
-<aside class="alert alert-tip" data-alert="tip">
+<aside class="alert alert-tip" data-alert="tip" role="note">
 <p class="alert-title">Tip</p>
 <p>
 Keep functions small and write a <a href="/posts/beta/">test</a> for each one.</p>

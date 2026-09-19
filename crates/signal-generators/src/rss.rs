@@ -13,7 +13,7 @@
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::writer::Writer;
 use serde::{Deserialize, Serialize};
-use signal_core::{canonical_url, rfc2822_date, ContentEntry};
+use signal_core::{canonical_url, rfc2822_date, CollectionId, ContentEntry};
 use std::io::Cursor;
 
 use crate::Generator;
@@ -251,12 +251,87 @@ pub fn main_channel_meta(site_title: &str) -> (String, String) {
     )
 }
 
-/// Channel copy for one term feed.
-pub fn term_channel_meta(label: &str, site_title: &str) -> (String, String) {
+/// Channel copy for a scoped feed (section, taxonomy term, or taxonomy
+/// label index), following the reference pattern the migrated blog emits:
+/// "{Scope} on {Site}" / "Recent content in {Scope} on {Site}".
+pub fn scoped_channel_meta(scope: &str, site_title: &str) -> (String, String) {
     (
-        format!("{label} on {site_title}"),
-        format!("Recent content in {label} on {site_title}"),
+        format!("{scope} on {site_title}"),
+        format!("Recent content in {scope} on {site_title}"),
     )
+}
+
+/// Output path of the feed generated for a route (`/posts/` ->
+/// `posts/index.xml`, `/` -> `index.xml`).
+pub fn feed_path_for_route(route: &str) -> String {
+    let trimmed = route.trim_matches('/');
+    if trimmed.is_empty() {
+        "index.xml".to_string()
+    } else {
+        format!("{trimmed}/index.xml")
+    }
+}
+
+/// Projection: one feed per collection (`<prefix>/index.xml`).
+///
+/// Mirrors the reference behavior where every section publishes a feed
+/// alongside its HTML listing: items are the collection's regular
+/// entries, newest-first, capped. A collection whose only member is its
+/// section root still gets an (empty-item) feed — the listing page
+/// exists, and the reference publishes empty feeds for it.
+pub struct SectionFeeds {
+    collection: CollectionId,
+    route_prefix: String,
+    limit: usize,
+}
+
+impl SectionFeeds {
+    /// Create a section-feed projection for one collection route prefix.
+    pub fn new(collection: CollectionId, route_prefix: impl Into<String>, limit: usize) -> Self {
+        let raw = route_prefix.into();
+        let trimmed = raw.trim_matches('/');
+        let route_prefix = if trimmed.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{trimmed}/")
+        };
+        Self {
+            collection,
+            route_prefix,
+            limit,
+        }
+    }
+
+    /// Item cap per feed.
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    /// Items: the collection's regular (non-section-root) entries,
+    /// newest-first, capped — the same selection the section HTML listing
+    /// makes, projected to feed items.
+    pub fn items(&self, model: &SiteModel, base_url: &str) -> Vec<FeedItem> {
+        model
+            .entries_in_collection_by_date(&self.collection)
+            .iter()
+            .filter(|entry| !entry.section_root)
+            .take(self.limit)
+            .map(|entry| feed_item(entry, base_url))
+            .collect()
+    }
+}
+
+impl Generator for SectionFeeds {
+    fn name(&self) -> &str {
+        "section-feeds"
+    }
+
+    fn generate(&self, _model: &SiteModel) -> Result<Vec<ArtifactSpec>, GenerateError> {
+        Ok(vec![ArtifactSpec::new(
+            feed_path_for_route(&self.route_prefix),
+            ArtifactKind::Rss,
+        )])
+    }
 }
 
 impl Generator for MainFeed {
@@ -269,10 +344,12 @@ impl Generator for MainFeed {
     }
 }
 
-/// Projection: one feed per taxonomy term (`<root>/<slug>/index.xml`).
+/// Projection: one feed per taxonomy term (`<root>/<slug>/index.xml`)
+/// plus the taxonomy label-index feed (`<root>/index.xml`).
 ///
-/// The taxonomy *index* itself gets no feed: its rows are labels, not
-/// content, and stamping them with dates would need non-model sources.
+/// The label feed lists the terms themselves — one item per term with the
+/// newest member's date as its timestamp — mirroring how the reference
+/// publishes an RSS alongside the terms listing page.
 pub struct TaxonomyFeeds {
     root: String,
     limit: usize,
@@ -293,6 +370,11 @@ impl TaxonomyFeeds {
         self.limit
     }
 
+    /// Taxonomy root route (normalized, leading and trailing slashes).
+    pub fn root(&self) -> &str {
+        &self.root
+    }
+
     /// Items for one term: tagged regular entries newest-first, capped.
     pub fn term_items(&self, model: &SiteModel, tag: &str, base_url: &str) -> Vec<FeedItem> {
         model
@@ -303,6 +385,37 @@ impl TaxonomyFeeds {
             .map(|entry| feed_item(entry, base_url))
             .collect()
     }
+
+    /// Items for the label-index feed: one per term in display order,
+    /// titled with the label, linked to the term route, and timestamped
+    /// with the newest member's date (undated membership leaves the
+    /// timestamp absent — never fabricated). Capped like every feed.
+    ///
+    /// A term-slug collision (a content error the plan would reject
+    /// anyway) yields an empty list rather than a partial projection.
+    pub fn label_items(&self, model: &SiteModel, base_url: &str) -> Vec<FeedItem> {
+        let terms = match crate::topic_terms(model, &self.root, signal_core::DEFAULT_DATE_FORMAT) {
+            Ok(terms) => terms,
+            Err(_) => return Vec::new(),
+        };
+        terms
+            .into_iter()
+            .take(self.limit)
+            .map(|term| FeedItem {
+                title: term.label.clone(),
+                url: signal_core::canonical_url(
+                    base_url,
+                    &signal_core::Route::new(term.route.clone()),
+                ),
+                pub_date: term
+                    .entries
+                    .iter()
+                    .find_map(|member| member.date.clone())
+                    .and_then(|date| rfc2822_date(&date)),
+                description: String::new(),
+            })
+            .collect()
+    }
 }
 
 impl Generator for TaxonomyFeeds {
@@ -311,7 +424,10 @@ impl Generator for TaxonomyFeeds {
     }
 
     fn generate(&self, model: &SiteModel) -> Result<Vec<ArtifactSpec>, GenerateError> {
-        let mut specs = Vec::new();
+        let mut specs = vec![ArtifactSpec::new(
+            feed_path_for_route(&self.root),
+            ArtifactKind::Rss,
+        )];
         for term in crate::topic_terms(model, &self.root, signal_core::DEFAULT_DATE_FORMAT)? {
             specs.push(ArtifactSpec::new(
                 format!("{}/index.xml", term.route.trim_matches('/')),
@@ -511,11 +627,137 @@ mod tests {
             )
         );
         assert_eq!(
-            term_channel_meta("Rust", "Sample Site"),
+            scoped_channel_meta("Rust", "Sample Site"),
             (
                 "Rust on Sample Site".to_string(),
                 "Recent content in Rust on Sample Site".to_string()
             )
         );
+        assert_eq!(
+            scoped_channel_meta("Articles", "Sample Site"),
+            (
+                "Articles on Sample Site".to_string(),
+                "Recent content in Articles on Sample Site".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn feed_path_for_route_maps_routes_to_index_xml() {
+        assert_eq!(feed_path_for_route("/posts/"), "posts/index.xml");
+        assert_eq!(feed_path_for_route("/"), "index.xml");
+        assert_eq!(feed_path_for_route("/topics/"), "topics/index.xml");
+    }
+
+    #[test]
+    fn section_feed_plans_prefix_feed_and_selects_membership() {
+        use signal_core::SiteModelBuilder;
+        let mut b = SiteModelBuilder::new();
+        let mut index = entry(1, "Section root", None, None);
+        index.route = Route::new("/posts/");
+        index.section_root = true;
+        b.add_entry(index);
+        let mut old = entry(2, "Old", Some("2026-01-01"), None);
+        old.route = Route::new("/posts/old/");
+        b.add_entry(old);
+        let mut new = entry(3, "New", Some("2026-09-03"), None);
+        new.route = Route::new("/posts/new/");
+        b.add_entry(new);
+        // An unrelated collection must not contribute items.
+        let mut other = entry(4, "Elsewhere", Some("2026-06-01"), None);
+        other.collection = CollectionId::new("notes");
+        other.route = Route::new("/notes/x/");
+        b.add_entry(other);
+        let model = b.build().expect("builds");
+
+        let feeds = SectionFeeds::new(CollectionId::new("posts"), "/posts/", 10);
+        let specs = feeds.generate(&model).expect("generates");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].path, "posts/index.xml");
+        assert_eq!(specs[0].kind, ArtifactKind::Rss);
+
+        let items = feeds.items(&model, "https://example.com");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "New");
+        assert_eq!(items[1].title, "Old");
+        assert_eq!(items[0].url, "https://example.com/posts/new/");
+    }
+
+    #[test]
+    fn section_feed_caps_membership_and_survives_empty_sections() {
+        use signal_core::SiteModelBuilder;
+        let mut b = SiteModelBuilder::new();
+        for (id, date) in [(1, "2026-01-01"), (2, "2026-02-01"), (3, "2026-03-01")] {
+            let mut e = entry(id, "Dated", Some(date), None);
+            e.route = Route::new(format!("/posts/e{id}/"));
+            b.add_entry(e);
+        }
+        let model = b.build().expect("builds");
+        let items = SectionFeeds::new(CollectionId::new("posts"), "/posts/", 2)
+            .items(&model, "https://example.com");
+        assert_eq!(items.len(), 2, "capped");
+        assert_eq!(items[0].title, "Dated"); // newest first
+                                             // A collection with no members still plans an empty feed.
+        let empty = SectionFeeds::new(CollectionId::new("missing"), "/missing/", 5);
+        assert!(empty.items(&model, "https://example.com").is_empty());
+        let specs = empty.generate(&model).expect("generates");
+        assert_eq!(specs[0].path, "missing/index.xml");
+    }
+
+    #[test]
+    fn taxonomy_feeds_plan_label_index_and_term_feeds() {
+        use signal_core::SiteModelBuilder;
+        let mut b = SiteModelBuilder::new();
+        let mut a = entry(1, "Alpha", Some("2026-01-01"), None);
+        a.route = Route::new("/posts/alpha/");
+        a.tags.insert("Rust".to_string());
+        let mut c = entry(2, "Newest", Some("2026-09-03"), None);
+        c.route = Route::new("/notes/newest/");
+        c.tags.insert("Rust".to_string());
+        b.add_entry(a);
+        b.add_entry(c);
+        let model = b.build().expect("builds");
+
+        let feeds = TaxonomyFeeds::new("/topics/", 20);
+        let specs = feeds.generate(&model).expect("generates");
+        let paths: Vec<&str> = specs.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, vec!["topics/index.xml", "topics/rust/index.xml"]);
+
+        // Label feed items: one per term, newest member's date, term link.
+        let items = feeds.label_items(&model, "https://example.com");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Rust");
+        assert_eq!(items[0].url, "https://example.com/topics/rust/");
+        assert_eq!(
+            items[0].pub_date.as_deref(),
+            Some("Thu, 03 Sep 2026 00:00:00 +0000")
+        );
+        assert_eq!(items[0].description, "");
+        // Deterministic ordering: same model, same bytes.
+        assert_eq!(items, feeds.label_items(&model, "https://example.com"));
+    }
+
+    #[test]
+    fn label_items_omit_dates_for_undated_membership_and_cap_terms() {
+        use signal_core::SiteModelBuilder;
+        let mut b = SiteModelBuilder::new();
+        let mut a = entry(1, "Undated one", None, None);
+        a.route = Route::new("/posts/a/");
+        a.tags.insert("Zeta".to_string());
+        let mut c = entry(2, "Dated two", Some("2026-05-05"), None);
+        c.route = Route::new("/posts/c/");
+        c.tags.insert("Alpha Tag".to_string());
+        b.add_entry(a);
+        b.add_entry(c);
+        let model = b.build().expect("builds");
+        let items = TaxonomyFeeds::new("/topics/", 20).label_items(&model, "https://example.com");
+        assert_eq!(items.len(), 2);
+        // Alphabetical terms: "Alpha Tag" first.
+        assert_eq!(items[0].title, "Alpha Tag");
+        assert_eq!(items[0].url, "https://example.com/topics/alpha-tag/");
+        assert_eq!(items[1].title, "Zeta");
+        assert!(items[1].pub_date.is_none(), "undated members: no date");
+        let capped = TaxonomyFeeds::new("/topics/", 1).label_items(&model, "https://example.com");
+        assert_eq!(capped.len(), 1);
     }
 }

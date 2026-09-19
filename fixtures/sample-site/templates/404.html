@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Not found · {{ site_title }}</title>
+</head>
+<body>
+  {% if menus %}
+  <nav class="main-nav" aria-label="Main">
+    <ul>
+      {% for item in menus.main %}
+      <li{% if item.active %} class="active"{% endif %}><a href="{{ item.url }}">{{ item.label }}</a></li>
+      {% endfor %}
+    </ul>
+  </nav>
+  {% endif %}
+  <h1>404 — nothing here</h1>
+  <p>That page does not exist on {{ site_title }}.</p>
+</body>
+</html>

@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Generator abstractions and projections for Signal SSG"
 
 [dependencies]
-signal-core = { path = "../signal-core" }
+signal-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 quick-xml = { workspace = true }

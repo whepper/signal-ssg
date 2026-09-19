@@ -22,7 +22,11 @@ use crate::ids::{CollectionId, ContentId, Route, Slug, SourceRef};
 /// `description`, `date`, and `body` are the vertical-slice subset of
 /// front-matter/derived data; further fields arrive when a real migration
 /// requirement demonstrates the need.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `PartialEq` but deliberately not `Eq`: [`Self::extra`] holds
+/// `serde_json::Value`, whose equality is partial (JSON numbers), mirroring
+/// `signal_markdown::FrontMatter`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ContentEntry {
     /// In-memory handle.
     pub id: ContentId,
@@ -70,8 +74,19 @@ pub struct ContentEntry {
     #[serde(default)]
     pub body: RenderedBody,
     /// Taxonomy tags (Hugo `topics` maps here; see ingestion).
+    ///
+    /// Canonical identity for taxonomy indexing, tag queries, and digests:
+    /// sorted by construction. Presentation order lives in
+    /// [`Self::tag_order`].
     #[serde(default)]
     pub tags: BTreeSet<String>,
+    /// Taxonomy tags in authored front-matter order (first-occurrence
+    /// deduplicated): display order for templates and summaries.
+    ///
+    /// Sorted order stays the contract for indexing, term grouping, and
+    /// digest identity; this list only controls what readers see.
+    #[serde(default)]
+    pub tag_order: Vec<String>,
     /// Whether the entry is featured (front-matter `featured`).
     ///
     /// Promoted to typed data because the home projection genuinely needs
@@ -95,10 +110,22 @@ pub struct ContentEntry {
     /// Semantic references to other entries (not build dependencies).
     #[serde(default)]
     pub references: Vec<ContentId>,
+    /// Site-specific front matter, preserved verbatim (e.g. `toc`, `repo`,
+    /// `math`).
+    ///
+    /// Typed fields are promoted to the fields above; everything else
+    /// survives ingestion verbatim so templates can consume site-specific
+    /// metadata without a new Rust type per field. A `BTreeMap` keeps
+    /// iteration — and therefore serialization and digests — deterministic.
+    /// `serde_json::Value` is the owned interchange representation front
+    /// matter is already parsed through.
+    #[serde(default)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl ContentEntry {
-    /// Create a minimal entry; tags, translations, and references default empty.
+    /// Create a minimal entry; tags, tag order, translations, and
+    /// references default empty.
     pub fn new(
         id: ContentId,
         collection: CollectionId,
@@ -122,11 +149,13 @@ impl ContentEntry {
             image_alt: None,
             body: RenderedBody::empty(),
             tags: BTreeSet::new(),
+            tag_order: Vec::new(),
             featured: false,
             section_root: false,
             translation_group: None,
             language: None,
             references: Vec::new(),
+            extra: BTreeMap::new(),
         }
     }
 }
@@ -135,7 +164,10 @@ impl ContentEntry {
 ///
 /// Construct via [`SiteModelBuilder`]; query via `&SiteModel`.
 /// All iteration is deterministic (ordered maps/sets).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `PartialEq` but deliberately not `Eq`: entries carry
+/// `serde_json::Value` extras whose equality is partial.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SiteModel {
     entries: BTreeMap<ContentId, ContentEntry>,
     by_collection: BTreeMap<CollectionId, BTreeSet<ContentId>>,
@@ -274,8 +306,10 @@ impl SiteModel {
 /// Newest-first comparator shared by date-ordered listing queries.
 ///
 /// Dated entries first (newest date first); undated entries last; ties
-/// broken by slug ascending, then `ContentId`.
-fn compare_by_date_desc(a: &&ContentEntry, b: &&ContentEntry) -> std::cmp::Ordering {
+/// broken by slug ascending, then `ContentId`. Public so downstream
+/// projections (e.g. related-entry ranking) reuse the exact ordering rule
+/// instead of reimplementing it.
+pub fn compare_by_date_desc(a: &&ContentEntry, b: &&ContentEntry) -> std::cmp::Ordering {
     match (&b.date, &a.date) {
         (Some(bd), Some(ad)) => bd
             .cmp(ad)
@@ -446,6 +480,20 @@ mod tests {
     }
 
     #[test]
+    fn tag_order_defaults_empty_and_round_trips() {
+        let mut e = entry(1, "posts", "a.md", "a", "/a/");
+        assert!(e.tag_order.is_empty());
+        e.tags = ["B", "A"].iter().map(|s| s.to_string()).collect();
+        e.tag_order = vec!["B".to_string(), "A".to_string()];
+        // Canonical set and display list coexist: sorted identity plus
+        // authored order survive a serialization round-trip together.
+        let json = serde_json::to_string(&e).expect("serializes");
+        let back: ContentEntry = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back.tags, e.tags);
+        assert_eq!(back.tag_order, vec!["B".to_string(), "A".to_string()]);
+    }
+
+    #[test]
     fn route_collisions_are_detected() {
         let mut b = SiteModelBuilder::new();
         b.add_entry(entry(1, "posts", "a.md", "a", "/same/"));
@@ -562,6 +610,25 @@ mod tests {
             model.all_tags(),
             vec!["Beta Tools".to_string(), "alpha Guides".to_string()]
         );
+    }
+
+    #[test]
+    fn extras_carry_site_specific_front_matter() {
+        let mut a = entry(1, "posts", "a.md", "a", "/a/");
+        a.extra.insert(
+            "repo".to_string(),
+            serde_json::Value::String("https://example.com/r".to_string()),
+        );
+        a.extra
+            .insert("toc".to_string(), serde_json::Value::Bool(true)); // Serialization is deterministic and round-trips (including extras).
+        let json = serde_json::to_string(&a).expect("serializes");
+        let round: ContentEntry = serde_json::from_str(&json).expect("round-trips");
+        assert_eq!(round, a);
+        // An entry without extras deserializes to an empty map by default.
+        let plain_json =
+            serde_json::to_string(&entry(2, "posts", "b.md", "b", "/b/")).expect("serializes");
+        let plain: ContentEntry = serde_json::from_str(&plain_json).expect("round-trips");
+        assert!(plain.extra.is_empty());
     }
 
     #[test]

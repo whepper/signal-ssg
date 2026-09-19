@@ -32,6 +32,22 @@ pub struct SignalConfig {
     /// names are accepted and ignored. Absent means no navigation.
     #[serde(default)]
     pub menus: BTreeMap<String, MenuConfig>,
+    /// Git-derived metadata settings. `None` (the default) means Signal
+    /// never consults Git.
+    #[serde(default)]
+    pub git: Option<GitConfig>,
+    /// Related-entry settings. `None` means the default cap applies; the
+    /// projection itself is always available to entry templates.
+    #[serde(default)]
+    pub related: Option<RelatedConfig>,
+    /// robots.txt settings. Presence of the `[robots]` table opts the site
+    /// into generating `robots.txt`; `None` (the default) means no robots
+    /// file is planned.
+    #[serde(default)]
+    pub robots: Option<RobotsConfig>,
+    /// Output settings. Absent means defaults (no minification).
+    #[serde(default)]
+    pub output: OutputConfig,
 }
 
 /// Site-wide settings.
@@ -52,11 +68,30 @@ pub struct SiteConfig {
     /// is enabled.
     #[serde(default)]
     pub home_template: Option<String>,
+    /// Template for the themed not-found page. When set, `404.html` is
+    /// planned at the output root and rendered with this template (site
+    /// chrome; no route, no canonical URL, no active menu state). Absent
+    /// means no 404 artifact.
+    ///
+    /// The output path is fixed: static hosts resolve unknown paths to
+    /// `404.html` by convention, so the template name is configured but
+    /// the destination is not.
+    #[serde(default)]
+    pub not_found_template: Option<String>,
     /// Default site author, used when an entry sets no `author`.
     ///
     /// Omitted from bylines and structured data when unset; never fabricated.
     #[serde(default)]
     pub author: Option<String>,
+    /// Site-wide description, used by templates as the fallback behind a
+    /// page's own `description` (e.g. `<meta name="description">` and
+    /// `og:description` on pages without one).
+    ///
+    /// Omitted from contexts when unset or blank; never fabricated. It
+    /// flows only into template contexts — feeds, sitemap, and search keep
+    /// their own fixed channel copy.
+    #[serde(default)]
+    pub description: Option<String>,
     /// Presentation date format (strftime-style subset, see
     /// `signal_core::format_date`), e.g. `"%-d %B %Y"` for `2 September 2026`.
     ///
@@ -111,6 +146,64 @@ pub struct FeedConfig {
     /// Maximum items per feed. Defaults to [`DEFAULT_FEED_LIMIT`].
     #[serde(default)]
     pub limit: Option<usize>,
+}
+
+/// Git-derived metadata settings.
+///
+/// Presence of the `[git]` table opts the site into Git-derived metadata;
+/// keys select which fields participate. Absent (the default) means Signal
+/// never consults Git. Git is advisory: when it is unavailable — no
+/// repository, no `git` binary — the build proceeds without derived values.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitConfig {
+    /// Derive `last_modified` from the last commit that touched each source
+    /// file (author date, `YYYY-MM-DD`). An explicit front-matter `lastmod`
+    /// always wins over the derived value.
+    #[serde(default)]
+    pub last_modified: bool,
+}
+
+/// Related-entry settings.
+///
+/// Caps the shared-tag related-entries projection exposed to entry
+/// templates. The projection itself is always available; only the cap is
+/// tunable here.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelatedConfig {
+    /// Maximum related entries per entry. Defaults to the projection's
+    /// default cap when unset (or zero, which is treated as unset).
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// robots.txt settings.
+///
+/// Presence of the `[robots]` table opts the site into robots.txt
+/// generation; the content is a fixed, deterministic allow-all policy that
+/// references the sitemap when `site.base_url` is configured (the same
+/// condition under which the sitemap itself is planned). Per-agent rules
+/// and disallow paths stay out until a real site requires them — a genuine
+/// future requirement justifies extending this table, not speculation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RobotsConfig {}
+
+/// Output settings.
+///
+/// Present as the `[output]` table. Everything here is off unless explicitly
+/// enabled, so existing sites byte-identical output is unchanged.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputConfig {
+    /// Minify rendered HTML pages (`[output] minify_html = true`).
+    ///
+    /// Off by default. When enabled, every template-rendered HTML artifact
+    /// (entry pages, section listings, home, taxonomy pages, the themed
+    /// 404) is passed through deterministic HTML-aware minification after
+    /// rendering. Non-HTML artifacts (feeds, sitemap, search index, robots,
+    /// static files) are never minified, and source content is untouched.
+    /// The flag rides the whole-config digest, so toggling it rebuilds
+    /// exactly the artifacts that already depend on configuration.
+    #[serde(default)]
+    pub minify_html: bool,
 }
 
 /// One configured menu item: a label plus a destination URL.
@@ -174,6 +267,18 @@ impl SignalConfig {
             .unwrap_or(crate::DEFAULT_DATE_FORMAT)
     }
 
+    /// Whether Git-derived `last_modified` is enabled
+    /// (`[git] last_modified = true`). Off unless explicitly configured.
+    pub fn git_last_modified(&self) -> bool {
+        self.git.as_ref().is_some_and(|git| git.last_modified)
+    }
+
+    /// Whether rendered HTML is minified (`[output] minify_html = true`).
+    /// Off unless explicitly configured.
+    pub fn minify_html(&self) -> bool {
+        self.output.minify_html
+    }
+
     /// Collection ids declared in configuration, in deterministic order.
     pub fn collection_ids(&self) -> Vec<CollectionId> {
         self.collections
@@ -225,5 +330,26 @@ mod tests {
         .expect("config parses");
         assert_eq!(cfg.site.title, "Example");
         assert_eq!(cfg.collection_ids(), vec![CollectionId::new("posts")]);
+    }
+
+    #[test]
+    fn site_description_defaults_absent_and_parses_when_set() {
+        let plain = SignalConfig::from_toml_str("[site]\ntitle = \"T\"\n").expect("parses");
+        assert_eq!(plain.site.description, None);
+        let cfg =
+            SignalConfig::from_toml_str("[site]\ntitle = \"T\"\ndescription = \"Site summary.\"\n")
+                .expect("parses");
+        assert_eq!(cfg.site.description.as_deref(), Some("Site summary."));
+    }
+
+    #[test]
+    fn html_minification_is_disabled_by_default_and_opt_in() {
+        let plain = SignalConfig::from_toml_str("[site]\ntitle = \"T\"\n").expect("parses");
+        assert!(!plain.minify_html(), "minification must be opt-in");
+        assert!(!plain.output.minify_html);
+        let cfg =
+            SignalConfig::from_toml_str("[site]\ntitle = \"T\"\n[output]\nminify_html = true\n")
+                .expect("parses");
+        assert!(cfg.minify_html());
     }
 }

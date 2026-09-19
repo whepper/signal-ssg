@@ -10,7 +10,7 @@
 //! without re-parsing.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use thiserror::Error;
 
 /// Front-matter failure (owned message; no parser types leak).
@@ -53,7 +53,10 @@ pub struct FrontMatter {
     /// Publication date as string (`date`, e.g. `2026-09-02`).
     #[serde(default)]
     pub date: Option<String>,
-    /// Taxonomy terms: `topics` (Hugo) and `tags` merged, deduplicated, sorted.
+    /// Taxonomy terms: `topics` (Hugo) and `tags` merged, first-occurrence
+    /// deduplicated, in authored order (`topics` first, then `tags`, each as
+    /// encountered). Display order for templates; canonical sorted order for
+    /// indexing is derived downstream (`ContentEntry.tags`).
     #[serde(default)]
     pub tags: Vec<String>,
     /// `draft = true` excludes the page from the build.
@@ -216,8 +219,11 @@ fn front_matter_from_value(value: &serde_json::Value) -> Result<FrontMatter, Str
 
     let mut tags = string_list("topics")?;
     tags.extend(string_list("tags")?);
-    tags.sort();
-    tags.dedup();
+    // First-occurrence dedup preserving authored order: templates render
+    // eyebrows and "first topic" picks from this order. Sorted order for
+    // taxonomy indexing is derived downstream (a `BTreeSet` sorts anyway).
+    let mut seen = HashSet::new();
+    tags.retain(|tag| seen.insert(tag.clone()));
 
     let draft = opt_bool("draft")?;
     let featured = opt_bool("featured")?;
@@ -280,12 +286,24 @@ mod tests {
         let text =
             "---\ntitle: T\ntopics: [B]\ntags: [A, B]\nrepo: https://example.com/r\ntoc: true\n---\nX\n";
         let (fm, _) = split_front_matter(text).expect("parses");
-        assert_eq!(fm.tags, vec!["A".to_string(), "B".to_string()]);
+        assert_eq!(fm.tags, vec!["B".to_string(), "A".to_string()]);
         assert_eq!(
             fm.extra.get("repo").and_then(|v| v.as_str()),
             Some("https://example.com/r")
         );
         assert_eq!(fm.extra.get("toc"), Some(&serde_json::Value::Bool(true)));
+    }
+
+    #[test]
+    fn authored_tag_order_is_preserved_with_first_occurrence_dedup() {
+        let text = "---\ntitle: T\ntopics: [Zulu, Alpha, Zulu]\ntags: [Mike, Alpha]\n---\nX\n";
+        let (fm, _) = split_front_matter(text).expect("parses");
+        // `topics` first as encountered, then `tags`; repeats collapse to
+        // their first position, never sorted.
+        assert_eq!(
+            fm.tags,
+            vec!["Zulu".to_string(), "Alpha".to_string(), "Mike".to_string()]
+        );
     }
 
     #[test]

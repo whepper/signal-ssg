@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-beta.1"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/whepper/signal-ssg"
@@ -24,6 +24,11 @@ sha2 = "0.10"
 thiserror = "2.0"
 clap = { version = "4.5", features = ["derive"] }
 miette = { version = "7.0", features = ["fancy"] }
-minijinja = "2.0"
+minijinja = { version = "2.0", features = ["urlencode"] }
 comrak = "0.24"
 toml = "0.8"
+simple-minify-html = "0.17"
+signal-core = { path = "crates/signal-core", version = "0.2.0" }
+signal-markdown = { path = "crates/signal-markdown", version = "0.2.0" }
+signal-render = { path = "crates/signal-render", version = "0.2.0" }
+signal-generators = { path = "crates/signal-generators", version = "0.2.0" }

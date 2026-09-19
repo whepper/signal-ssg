@@ -102,11 +102,19 @@ fn transform_alert<'a>(arena: &'a Arena<AstNode<'a>>, blockquote: &'a AstNode<'a
     }
 
     let pos = blockquote.data.borrow().sourcepos.start;
+    // ARIA semantics follow the alert kind: urgent kinds are live
+    // announcements (`role="alert"`), the rest are advisory notes. The
+    // element and classes stay theme-styling hooks; the role is semantics.
+    let role = if kind == "warning" || kind == "caution" {
+        "alert"
+    } else {
+        "note"
+    };
     let open = html_node(
         arena,
         pos,
         format!(
-            "<aside class=\"alert alert-{kind}\" data-alert=\"{kind}\">\n<p class=\"alert-title\">{label}</p>"
+            "<aside class=\"alert alert-{kind}\" data-alert=\"{kind}\" role=\"{role}\">\n<p class=\"alert-title\">{label}</p>"
         ),
     );
     let close = html_node(arena, pos, "</aside>".to_string());
@@ -173,8 +181,9 @@ mod tests {
     fn warning_renders_semantic_aside() {
         let body = parse_markdown("> [!WARNING]\n> Be careful.\n");
         assert!(
-            body.html
-                .contains("<aside class=\"alert alert-warning\" data-alert=\"warning\">"),
+            body.html.contains(
+                "<aside class=\"alert alert-warning\" data-alert=\"warning\" role=\"alert\">"
+            ),
             "html: {}",
             body.html
         );
@@ -186,6 +195,25 @@ mod tests {
         assert!(body.html.contains("Be careful."), "html: {}", body.html);
         assert!(body.html.contains("</aside>"), "html: {}", body.html);
         assert!(!body.html.contains("blockquote"), "html: {}", body.html);
+    }
+
+    #[test]
+    fn alert_roles_follow_urgency() {
+        // Urgent kinds announce themselves; advisory kinds are notes.
+        for (kind, role) in [
+            ("NOTE", "note"),
+            ("TIP", "note"),
+            ("IMPORTANT", "note"),
+            ("WARNING", "alert"),
+            ("CAUTION", "alert"),
+        ] {
+            let body = parse_markdown(&format!("> [!{kind}]\n> Body.\n"));
+            assert!(
+                body.html.contains(&format!("role=\"{role}\"")),
+                "{kind} must carry role={role:?}: {}",
+                body.html
+            );
+        }
     }
 
     #[test]

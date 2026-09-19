@@ -163,9 +163,16 @@ fn normalize_source(
     entry.image = normalize_image(fm.image.as_deref(), &origin, &text)?;
     entry.image_alt = fm.image_alt.filter(|a| !a.trim().is_empty());
     entry.body = parse_markdown(body_markdown);
+    // Canonical sorted identity for indexing plus the authored display
+    // order for templates; both derive from the same ordered, deduplicated
+    // front-matter list.
+    entry.tag_order = fm.tags.clone();
     entry.tags = fm.tags.into_iter().collect::<BTreeSet<_>>();
     entry.featured = fm.featured;
     entry.section_root = is_section_root;
+    // Site-specific fields survive verbatim (e.g. `toc`, `repo`, `math`);
+    // templates read them from the `extra` context key.
+    entry.extra = fm.extra;
     Ok(Some(entry))
 }
 
@@ -243,6 +250,14 @@ pub fn ingest_site(root: &Path, config: &SignalConfig) -> Result<(SiteModel, usi
         }
     }
     let sources = discover_collection_sources(root, config)?;
+    // Git-derived last_modified is opt-in ([git] last_modified = true) and
+    // advisory: explicit front-matter `lastmod` always wins, and Git
+    // unavailability degrades to no derived dates.
+    let git_dates = if config.git_last_modified() {
+        crate::git::last_modified_dates(root)
+    } else {
+        std::collections::BTreeMap::new()
+    };
     let mut builder = SiteModelBuilder::new();
     let mut skipped_drafts = 0;
     let mut next_id: u32 = 1;
@@ -250,7 +265,12 @@ pub fn ingest_site(root: &Path, config: &SignalConfig) -> Result<(SiteModel, usi
         #[allow(clippy::cast_possible_truncation)]
         let id = ContentId(next_id);
         match normalize_source(id, source, config)? {
-            Some(entry) => {
+            Some(mut entry) => {
+                if entry.last_modified.is_none() && !git_dates.is_empty() {
+                    if let Some(date) = git_dates.get(&source.root_relative) {
+                        entry.last_modified = Some(date.clone());
+                    }
+                }
                 builder.add_entry(entry);
                 next_id += 1;
             }
@@ -306,6 +326,160 @@ mod tests {
         assert_eq!(entry.body.word_count, 4);
         let tagged: Vec<u32> = model.entries_tagged("A").iter().map(|e| e.id.0).collect();
         assert_eq!(tagged, vec![entry.id.0]);
+    }
+
+    #[test]
+    fn authored_topic_order_survives_ingestion() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[(
+                "content/posts/ordered.md",
+                "---\ntitle: Ordered\ntopics: [Zulu, Alpha]\ntags: [Mike, Alpha]\n---\n\nBody.\n",
+            )],
+        );
+        let (model, _) = ingest_site(dir.path(), &config_with("/posts/")).expect("ingests");
+        let entry = model
+            .lookup_by_route(&Route::new("/posts/ordered/"))
+            .expect("route");
+        // Display order: topics first as encountered, then tags, repeats
+        // collapsed to first position — never sorted.
+        assert_eq!(
+            entry.tag_order,
+            vec!["Zulu".to_string(), "Alpha".to_string(), "Mike".to_string()]
+        );
+        // Canonical identity stays sorted for indexing and queries.
+        assert_eq!(
+            entry.tags.iter().cloned().collect::<Vec<_>>(),
+            vec!["Alpha".to_string(), "Mike".to_string(), "Zulu".to_string()]
+        );
+        // Every term still indexes the entry.
+        for term in ["Zulu", "Alpha", "Mike"] {
+            assert_eq!(model.entries_tagged(term).len(), 1, "term {term}");
+        }
+    }
+
+    #[test]
+    fn arbitrary_front_matter_survives_ingestion() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "content/posts/a.md",
+                    "---\ntitle: A\nrepo: https://example.com/r\ntoc: true\nnested:\n  depth: 2\n---\n\nA.\n",
+                ),
+                ("content/posts/b.md", "---\ntitle: B\ntopics: [Rust]\n---\n\nB.\n"),
+            ],
+        );
+        let (model, _) = ingest_site(dir.path(), &config_with("/posts/")).expect("ingests");
+        let a = model
+            .lookup_by_route(&Route::new("/posts/a/"))
+            .expect("entry");
+        // Unknown fields arrive verbatim, whatever their shape.
+        assert_eq!(
+            a.extra.get("repo").and_then(|v| v.as_str()),
+            Some("https://example.com/r")
+        );
+        assert_eq!(a.extra.get("toc"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(
+            a.extra.get("nested").and_then(|v| v.get("depth")),
+            Some(&serde_json::Value::from(2))
+        );
+        // Typed/known fields never leak into `extra`.
+        for key in [
+            "title",
+            "description",
+            "date",
+            "topics",
+            "tags",
+            "draft",
+            "featured",
+        ] {
+            assert!(
+                !a.extra.contains_key(key),
+                "typed key {key} leaked to extra"
+            );
+        }
+        // An entry without extras keeps the map empty.
+        let b = model
+            .lookup_by_route(&Route::new("/posts/b/"))
+            .expect("entry");
+        assert!(b.extra.is_empty(), "{:?}", b.extra);
+    }
+
+    #[test]
+    fn git_last_modified_fills_gaps_and_front_matter_wins() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        write_site(
+            root,
+            &[
+                (
+                    "content/posts/explicit.md",
+                    "---\ntitle: Explicit\nlastmod: 2020-01-01\n---\n\nE.\n",
+                ),
+                (
+                    "content/posts/derived.md",
+                    "---\ntitle: Derived\n---\n\nD.\n",
+                ),
+            ],
+        );
+        let git = |args: &[&str], date: Option<&str>| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-C")
+                .arg(root)
+                .arg("-c")
+                .arg("user.name=Signal Test")
+                .arg("-c")
+                .arg("user.email=test@example.com")
+                .args(args);
+            if let Some(date) = date {
+                cmd.env("GIT_AUTHOR_DATE", date);
+                cmd.env("GIT_COMMITTER_DATE", date);
+            }
+            let output = cmd.output().expect("git runs");
+            assert!(
+                output.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init"], None);
+        git(&["add", "-A"], None);
+        git(
+            &["commit", "-m", "initial"],
+            Some("2026-05-05T00:00:00 +0000"),
+        );
+
+        let toml = "[site]\ntitle = \"T\"\n[git]\nlast_modified = true\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n";
+        let config = SignalConfig::from_toml_str(toml).expect("config parses");
+        let (model, _) = ingest_site(root, &config).expect("ingests");
+        // Explicit front-matter lastmod wins over the Git-derived date.
+        let explicit = model
+            .lookup_by_route(&Route::new("/posts/explicit/"))
+            .expect("entry");
+        assert_eq!(explicit.last_modified.as_deref(), Some("2020-01-01"));
+        // Git fills the gap when no lastmod is given.
+        let derived = model
+            .lookup_by_route(&Route::new("/posts/derived/"))
+            .expect("entry");
+        assert_eq!(derived.last_modified.as_deref(), Some("2026-05-05"));
+
+        // Without the [git] table, nothing is *derived*: the front-matter
+        // lastmod still stands, the gap stays empty.
+        let (plain, _) = ingest_site(root, &config_with("/posts/")).expect("ingests");
+        let explicit_plain = plain
+            .lookup_by_route(&Route::new("/posts/explicit/"))
+            .expect("entry");
+        assert_eq!(explicit_plain.last_modified.as_deref(), Some("2020-01-01"));
+        let derived_plain = plain
+            .lookup_by_route(&Route::new("/posts/derived/"))
+            .expect("entry");
+        assert!(
+            derived_plain.last_modified.is_none(),
+            "derived.md must stay Git-free without [git]"
+        );
     }
 
     #[test]

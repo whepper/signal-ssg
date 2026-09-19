@@ -331,6 +331,20 @@ pub fn absolute_url(base_url: &str, resolved: &str) -> String {
     canonical_url(base_url, &Route::new(resolved.to_string()))
 }
 
+/// Serialize a normalized front-matter image reference for template `src`
+/// attributes. A resolved site-root image path is a path, never an authored
+/// URL, so `#`/`?` encode here exactly as they do in metadata (which flows
+/// through [`absolute_url`] → [`canonical_url`]). Absolute
+/// (`http(s)://…`) and protocol-relative (`//…`) values pass through
+/// untouched — encoding them would destroy the scheme.
+pub fn image_src_url(image: &str) -> String {
+    if image.starts_with('/') && !image.starts_with("//") {
+        encode_url_path(image)
+    } else {
+        image.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,6 +684,22 @@ mod tests {
         for bad in ["javascript:x", "data:x", "mailto:a@b.c", "a b"] {
             assert!(resolve_image_url(bad).is_none(), "{bad:?}");
             assert!(!is_safe_author_url(bad, UrlUse::Image), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn image_src_url_encodes_paths_but_preserves_urls() {
+        // Site-root paths encode URL-significant bytes per segment.
+        assert_eq!(image_src_url("/images/a b.png"), "/images/a%20b.png");
+        assert_eq!(image_src_url("/img/a.png"), "/img/a.png");
+        // Absolute and protocol-relative values pass through untouched.
+        for url in [
+            "https://cdn.example/a b.png",
+            "http://example.com/a.png",
+            "//cdn.example/a.png",
+            "images/relative.png",
+        ] {
+            assert_eq!(image_src_url(url), url, "input {url:?}");
         }
     }
 }

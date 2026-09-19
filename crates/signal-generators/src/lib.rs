@@ -15,17 +15,25 @@
 //! Rendering happens downstream in `signal-cli`, one artifact at a time,
 //! from explicit contexts built with [`EntrySummary`] and [`TopicSummary`].
 
+#![forbid(unsafe_code)]
+
 pub mod json_ld;
+pub mod robots;
 pub mod rss;
 pub mod search;
 pub mod sitemap;
 
-pub use rss::{MainFeed, TaxonomyFeeds};
+pub use robots::Robots;
+pub use rss::{MainFeed, SectionFeeds, TaxonomyFeeds};
 pub use search::Search;
 pub use sitemap::Sitemap;
 
 use serde::{Deserialize, Serialize};
-use signal_core::{slugify, ArtifactKind, ArtifactSpec, CollectionId, ContentEntry, SiteModel};
+use signal_core::{
+    compare_by_date_desc, slugify, ArtifactKind, ArtifactSpec, CollectionId, ContentEntry,
+    ContentId, SiteModel,
+};
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 /// Generator failure.
@@ -87,9 +95,20 @@ pub struct EntrySummary {
     /// characters arrive already encoded. The logical route stays untouched
     /// on [`ContentEntry`] and in manifest keys/digests.
     pub route: String,
-    /// Taxonomy terms in deterministic order.
+    /// Taxonomy terms in authored front-matter order (first-occurrence
+    /// deduplicated): display order for eyebrows, topic lists, and
+    /// "first topic" picks. Canonical sorted order stays the contract for
+    /// taxonomy indexing and term grouping.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Hero image, URL-path form (see [`signal_core::image_src_url`]), if
+    /// given. Summaries feed heroes and cards; the full entry context
+    /// carries the same value under `image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Hero image alternative text, if given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_alt: Option<String>,
     /// Reading time in minutes.
     pub reading_time: usize,
 }
@@ -112,7 +131,9 @@ impl EntrySummary {
                 .as_deref()
                 .and_then(|d| signal_core::format_date(d, date_format)),
             route: signal_core::encode_route_path(&entry.route),
-            tags: entry.tags.iter().cloned().collect(),
+            tags: entry.tag_order.clone(),
+            image: entry.image.as_deref().map(signal_core::image_src_url),
+            image_alt: entry.image_alt.clone(),
             reading_time: reading_time_minutes(entry.body.word_count),
         })
     }
@@ -324,6 +345,59 @@ pub fn tagged_summaries(model: &SiteModel, tag: &str, date_format: &str) -> Vec<
         .entries_tagged_by_date(tag)
         .iter()
         .filter_map(|entry| EntrySummary::of(entry, date_format))
+        .collect()
+}
+
+/// Default maximum of related entries surfaced for one entry. Matches the
+/// compatibility target's `first 3` related-articles block; overridable via
+/// `[related] limit`.
+pub const DEFAULT_RELATED_LIMIT: usize = 3;
+
+/// Related entries for one entry: strongest shared-tag overlaps.
+///
+/// Candidates are non-section-root entries site-wide sharing at least one
+/// tag with `entry` (the entry itself never appears). Ranking is by
+/// shared-tag count descending; ties resolve in the standard listing order
+/// (newest date first, then slug, then `ContentId` — the shared
+/// [`compare_by_date_desc`] rule). Fully deterministic; capped at `limit`
+/// (zero yields an empty list). Entries are projected through
+/// [`EntrySummary::of`], so section roots can never appear twice over.
+pub fn related_entries(
+    model: &SiteModel,
+    entry: &ContentEntry,
+    limit: usize,
+    date_format: &str,
+) -> Vec<EntrySummary> {
+    if limit == 0 || entry.tags.is_empty() {
+        return Vec::new();
+    }
+    // Shared-tag counts over the per-tag index. BTreeMap keeps iteration
+    // deterministic; a candidate appearing under several of the entry's
+    // tags accumulates its score.
+    let mut scores: BTreeMap<ContentId, usize> = BTreeMap::new();
+    for tag in &entry.tags {
+        for candidate in model.entries_tagged(tag) {
+            if candidate.id == entry.id || candidate.section_root {
+                continue;
+            }
+            *scores.entry(candidate.id).or_insert(0) += 1;
+        }
+    }
+    let mut ranked: Vec<(usize, &ContentEntry)> = scores
+        .into_iter()
+        .filter_map(|(id, score)| model.get(id).map(|candidate| (score, candidate)))
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.0.cmp(&a.0).then_with(|| {
+            // `compare_by_date_desc` takes `&&ContentEntry`; the pairs carry
+            // `&ContentEntry`, so borrow one more level for the shared rule.
+            compare_by_date_desc(&a.1, &b.1)
+        })
+    });
+    ranked.truncate(limit);
+    ranked
+        .into_iter()
+        .filter_map(|(_, candidate)| EntrySummary::of(candidate, date_format))
         .collect()
 }
 
@@ -658,6 +732,73 @@ mod tests {
     }
 
     #[test]
+    fn summaries_carry_hero_image_in_url_path_form() {
+        let mut b = SiteModelBuilder::new();
+        let mut e = ContentEntry::new(
+            ContentId(1),
+            CollectionId::new("posts"),
+            SourceRef::new(CollectionId::new("posts"), "a.md"),
+            Slug::new("a"),
+            Route::new("/posts/a/"),
+            "A",
+        );
+        e.image = Some("/images/a b.png".to_string());
+        e.image_alt = Some("Alt".to_string());
+        b.add_entry(e);
+        b.add_entry(ContentEntry::new(
+            ContentId(2),
+            CollectionId::new("posts"),
+            SourceRef::new(CollectionId::new("posts"), "b.md"),
+            Slug::new("b"),
+            Route::new("/posts/b/"),
+            "B",
+        ));
+        let model = b.build().expect("builds");
+        let summaries = collection_summaries(&model, &CollectionId::new("posts"), "%Y-%m-%d");
+        let a = summaries.iter().find(|s| s.title == "A").expect("listed");
+        // Same serialization rule as the full entry context: paths encode,
+        // alt text passes through, absence omits the keys.
+        assert_eq!(a.image.as_deref(), Some("/images/a%20b.png"));
+        assert_eq!(a.image_alt.as_deref(), Some("Alt"));
+        let b = summaries.iter().find(|s| s.title == "B").expect("listed");
+        assert_eq!(b.image, None);
+        assert_eq!(b.image_alt, None);
+    }
+
+    #[test]
+    fn summaries_carry_authored_tag_order() {
+        let mut b = SiteModelBuilder::new();
+        let mut e = ContentEntry::new(
+            ContentId(1),
+            CollectionId::new("posts"),
+            SourceRef::new(CollectionId::new("posts"), "a.md"),
+            Slug::new("a"),
+            Route::new("/posts/a/"),
+            "A",
+        );
+        e.tags = ["Alpha", "Mike", "Zulu"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        e.tag_order = vec!["Zulu".to_string(), "Alpha".to_string(), "Mike".to_string()];
+        b.add_entry(e);
+        let model = b.build().expect("builds");
+        let summaries = collection_summaries(&model, &CollectionId::new("posts"), "%Y-%m-%d");
+        assert_eq!(summaries.len(), 1);
+        // Template-visible order follows authorship, not the canonical set.
+        assert_eq!(
+            summaries[0].tags,
+            vec!["Zulu".to_string(), "Alpha".to_string(), "Mike".to_string()]
+        );
+        // Query semantics still use the canonical sorted set: every term
+        // resolves, in canonical term order.
+        assert_eq!(
+            model.all_tags(),
+            vec!["Alpha".to_string(), "Mike".to_string(), "Zulu".to_string()]
+        );
+    }
+
+    #[test]
     fn empty_collection_summarizes_to_empty() {
         let model = model_two_entries();
         assert!(collection_summaries(&model, &CollectionId::new("missing"), "%Y-%m-%d").is_empty());
@@ -680,6 +821,9 @@ mod tests {
         );
         e.date = date.map(str::to_string);
         e.tags = tags.iter().map(|t| t.to_string()).collect();
+        // Test entries mirror ingestion: the display list carries the same
+        // terms in the given order.
+        e.tag_order = tags.iter().map(|t| t.to_string()).collect();
         e
     }
 
@@ -763,5 +907,113 @@ mod tests {
         let terms = topic_terms(&model, "/topics/", "%Y-%m-%d").expect("terms");
         assert_eq!(terms.len(), 1);
         assert_eq!(terms[0].count, 1);
+    }
+
+    // --- related entries: shared-tag overlap projection ---
+
+    fn related_model() -> SiteModel {
+        let mut b = SiteModelBuilder::new();
+        // `source` shares both tags with `target` (score 2).
+        let mut source = tagged_entry(1, "posts", "source", Some("2026-01-01"), &["A", "B"]);
+        source.route = Route::new("/posts/source/");
+        // `single` shares one tag; newer date, but score sorts first.
+        let mut single = tagged_entry(2, "posts", "single", Some("2026-09-09"), &["B"]);
+        single.route = Route::new("/posts/single/");
+        // Unrelated entry: never a candidate.
+        let mut other = tagged_entry(3, "posts", "other", Some("2026-09-08"), &["Z"]);
+        other.route = Route::new("/posts/other/");
+        b.add_entry(source);
+        b.add_entry(single);
+        b.add_entry(other);
+        let mut target = tagged_entry(4, "posts", "target", Some("2026-02-02"), &["A", "B"]);
+        target.route = Route::new("/posts/target/");
+        b.add_entry(target);
+        b.build().expect("builds")
+    }
+
+    #[test]
+    fn related_ranks_by_shared_tag_count() {
+        let model = related_model();
+        let target = model
+            .lookup_by_route(&Route::new("/posts/target/"))
+            .expect("t");
+        let related = related_entries(&model, target, 3, "%Y-%m-%d");
+        let titles: Vec<&str> = related.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, vec!["Title source", "Title single"]);
+    }
+
+    #[test]
+    fn related_excludes_self_unrelated_and_section_roots() {
+        let mut b = SiteModelBuilder::new();
+        let mut index = tagged_entry(1, "posts", "", None, &["A"]);
+        index.route = Route::new("/posts/");
+        index.section_root = true;
+        b.add_entry(index);
+        let mut solo = tagged_entry(2, "posts", "solo", None, &["A"]);
+        solo.route = Route::new("/posts/solo/");
+        b.add_entry(solo);
+        let model = b.build().expect("builds");
+        let solo_entry = model
+            .lookup_by_route(&Route::new("/posts/solo/"))
+            .expect("s");
+        // The section root sharing the tag is excluded; `solo` itself never
+        // appears; nothing else overlaps → empty.
+        assert!(related_entries(&model, solo_entry, 3, "%Y-%m-%d").is_empty());
+    }
+
+    #[test]
+    fn related_caps_at_the_limit_and_stays_deterministic() {
+        let mut b = SiteModelBuilder::new();
+        let mut target = tagged_entry(10, "posts", "target", Some("2026-01-01"), &["T"]);
+        target.route = Route::new("/posts/target/");
+        b.add_entry(target);
+        // Four same-score candidates, distinct dates: after the (equal)
+        // score, order is newest-first. Caps and orderings must agree.
+        for (id, slug, date) in [
+            (1u32, "a", "2026-01-02"),
+            (2, "b", "2026-03-04"),
+            (3, "c", "2026-02-03"),
+            (4, "d", "2025-12-31"),
+        ] {
+            let mut e = tagged_entry(id, "posts", slug, Some(date), &["T"]);
+            e.route = Route::new(format!("/posts/{slug}/"));
+            b.add_entry(e);
+        }
+        let model = b.build().expect("builds");
+        let target = model
+            .lookup_by_route(&Route::new("/posts/target/"))
+            .expect("t");
+        let capped = related_entries(&model, target, 3, "%Y-%m-%d");
+        let routes: Vec<&str> = capped.iter().map(|s| s.route.as_str()).collect();
+        assert_eq!(routes, vec!["/posts/b/", "/posts/c/", "/posts/a/"]);
+        // Same inputs, same output.
+        assert_eq!(capped, related_entries(&model, target, 3, "%Y-%m-%d"));
+        // A larger limit surfaces the remaining candidate too.
+        let all = related_entries(&model, target, 10, "%Y-%m-%d");
+        assert_eq!(all.len(), 4);
+        assert_eq!(all[3].route, "/posts/d/");
+        // Zero limit is an explicit empty result.
+        assert!(related_entries(&model, target, 0, "%Y-%m-%d").is_empty());
+    }
+
+    #[test]
+    fn related_of_untagged_entry_and_empty_model_is_empty() {
+        let model = related_model();
+        let untagged = ContentEntry::new(
+            ContentId(99),
+            CollectionId::new("posts"),
+            SourceRef::new(CollectionId::new("posts"), "u.md"),
+            Slug::new("u"),
+            Route::new("/posts/u/"),
+            "Untagged",
+        );
+        // No tags → no candidates, without consulting the model at all.
+        assert!(related_entries(&model, &untagged, 3, "%Y-%m-%d").is_empty());
+        let empty = SiteModelBuilder::new().build().expect("builds");
+        let scratch = related_model();
+        let any = scratch
+            .lookup_by_route(&Route::new("/posts/target/"))
+            .expect("t");
+        assert!(related_entries(&empty, any, 3, "%Y-%m-%d").is_empty());
     }
 }

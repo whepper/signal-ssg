@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "generation": {
-    "engine_version": "0.1.0-beta.1",
-    "behavior_version": 3
+    "engine_version": "0.2.0",
+    "behavior_version": 8
   },
-  "config_digest": "f4f8919549861db69b561a0d9d381b7dd233073131f7bff6681c7cbd090652d0",
+  "config_digest": "95567887e1440b6bd95737486b07193f3e1a556d73d45f1b4ebc331c42431187",
   "templates": {
+    "404.html": "bbb88ecd4076e6a9ea3e34cee537880f4235da2ee02302833041a40563e09491",
     "home.html": "cf11d4211bdca142163811238a1cb87a314ee44ffe720c0caf1aacc8cdac38ad",
     "post.html": "bfb60b4fafb90df823fcbd6a69efcac7bc05fae4120ea4625ab6f9fa4f11b84b",
     "section.html": "45dc9fd3847544743cf3f6054b1774ddb312f0c8b43a579225ab2db74744e9b7",
@@ -13,27 +14,42 @@
     "topics.html": "17d33d4d4f3ec896c5277484356be28844cc8b449903b0a69f351650d66c1bbe"
   },
   "entries": {
-    "/notes/": "5b45999814611b341c0ea11e72cae0c5f22a5673c3b1c0449f94a3497ad33cd9",
-    "/posts/alpha/": "58d0e367f9aaeead93978b0926bf9a869ee4358da4bd614117c974049c38768d",
-    "/posts/beta/": "426c0243ce89828c7a46972b53f0d7a65d623c99d72314f3991170c7729b8ce6",
-    "/projects/": "c7cbd75dc77341f11f68d52b7c528355a44a206d8348f616c61566aa835d1c52",
-    "/projects/gadget/": "c9c4f4b9e22bb5364c4adf698af6febe2a256f1f1f61ac18361fb7dd5c09a84b"
+    "/notes/": "9de9412a2f7cd934742bd6e335b1ce473c0dbcef000c29d5b2d52a0de8916c81",
+    "/posts/alpha/": "8ffe3b9b34460d0430462fc1326a6569165c253c7e2a6f8a9c8e626f5a52689b",
+    "/posts/beta/": "dea93c97399c66d2c975fda3fdcb060fab1bd2a6f348ecb2cb7712a7ea4836ba",
+    "/projects/": "7d275055f048c1645a938aeda1bac48f56557658aace5409ae68c9e8b8a60c28",
+    "/projects/gadget/": "761a5836ef2eae48bc7dbb6a56b5b4f0bcb0b39ad90b56eb805a944350ce7905"
   },
   "queries": {
+    "feed:labels": "e897c458996795de0d7ec41b18852e63e50f3296a4011965dc05f16cf2aba849",
     "feed:main": "88936e1c440733f1cab07588649f62141f07f0d522db760004a98f48790d6c59",
+    "feed:section:notes": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "feed:section:posts": "313616062983ca435f289d410d707f688145199a9b6f0af450e750f1dd6b1c66",
+    "feed:section:projects": "6af9bb24b70508248a937641023901a0c3653cd18b50f91ab8e3a30a4dc8d95d",
     "feed:term:rust": "313616062983ca435f289d410d707f688145199a9b6f0af450e750f1dd6b1c66",
     "feed:term:systems": "88936e1c440733f1cab07588649f62141f07f0d522db760004a98f48790d6c59",
-    "home:posts": "1099a1d7e6604db4e4e9d1d67a8583c665f37289fb66b6596b0e2a54d4f4b19a",
+    "home:posts": "74550e367f4359b460a786d62bb61aa8c1cceaf2dace92d3907e59b52693c7c4",
+    "related:/posts/alpha/": "f8640a395400e437b6b8f4f705d609527cb1ccecf3d9c02390598e5edb4e54fb",
+    "related:/posts/beta/": "775de1682252cd245ce3c74145ee3eaa2b70e88ffce6d049e30f6e9ffa2d6b2e",
+    "related:/projects/gadget/": "775de1682252cd245ce3c74145ee3eaa2b70e88ffce6d049e30f6e9ffa2d6b2e",
     "routes_inventory": "8ff655b89daeae10e9b1cb5a717ab6c623a00e9060fb879de2b1a741cbd36730",
     "search_documents": "55a6708a5195f73ae4b0579bbfca47e79659ef10363b78f90a743945bf09a4a1",
     "summaries:notes": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
-    "summaries:posts": "19c380388885f68adbb681b9014086f5b9110b7a8be074dc835b1772c23da4b0",
+    "summaries:posts": "dc775c3ad4cf1978cd80791f494a6124e20f2d731c33b42f6d90ead7143d1476",
     "summaries:projects": "b8b4efedcbdcfb41312749180f03655fdd1ff9593e7c7ddb0cb2b2426e2f2959",
-    "tagged:Rust": "19c380388885f68adbb681b9014086f5b9110b7a8be074dc835b1772c23da4b0",
-    "tagged:Systems": "a8ee04baa6871eeacb08f7c4f8482c5e0d8f1621786b3270d7299ca656eb1dbb",
-    "topic_terms": "1610216bd93d1e6b473c4fb879d2d25855a6eca04aff954754b6dae7bdd46a51"
+    "tagged:Rust": "dc775c3ad4cf1978cd80791f494a6124e20f2d731c33b42f6d90ead7143d1476",
+    "tagged:Systems": "395bae7b74a370e684284d5b04da281fd7c46c03c16e03246d9b056f0b12fd8a",
+    "topic_terms": "eb3b7f5d414d14ee38be5d77e485f81f1a899459fb2546a2e4d5a05f853e6012"
   },
   "artifacts": {
+    "404.html": {
+      "kind": "NotFound",
+      "inputs": [
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "13e4cbc2257d2cfe73b7bd9225af667c7bcacb3d1d718888a91572a069ad45db"
+    },
     "images/alpha.svg": {
       "kind": "Static",
       "inputs": [
@@ -112,6 +128,18 @@
       ],
       "output_digest": "1a8e0a1f9a981e7f0c212ddb929ea76593d9de19bf33a8be795a242dd5e70ba9"
     },
+    "notes/index.xml": {
+      "kind": "Rss",
+      "inputs": [
+        {
+          "Query": {
+            "key": "feed:section:notes"
+          }
+        },
+        "Config"
+      ],
+      "output_digest": "b1d0dc6f0c09d2f80038dce4a257078af26d37600b56caa3e0f959994ee0bc77"
+    },
     "posts/alpha/index.html": {
       "kind": "Page",
       "route": "/posts/alpha/",
@@ -121,10 +149,15 @@
             "route": "/posts/alpha/"
           }
         },
+        {
+          "Query": {
+            "key": "related:/posts/alpha/"
+          }
+        },
         "TemplateSet",
         "Config"
       ],
-      "output_digest": "e427b1d03a477fb1531600bc022bbe0d95eb1ee2e6c03825add97bd3d2caf18c"
+      "output_digest": "5dc3f498c0e10a6ba95377b5a0eebbc93ef7980438e5cae07413af6010d1a4b7"
     },
     "posts/beta/index.html": {
       "kind": "Page",
@@ -133,6 +166,11 @@
         {
           "Entry": {
             "route": "/posts/beta/"
+          }
+        },
+        {
+          "Query": {
+            "key": "related:/posts/beta/"
           }
         },
         "TemplateSet",
@@ -154,6 +192,18 @@
       ],
       "output_digest": "2363fe7646f510057ab1367eee588f2133fc1f0a2d7477bc4caa6fb4b7cabc4c"
     },
+    "posts/index.xml": {
+      "kind": "Rss",
+      "inputs": [
+        {
+          "Query": {
+            "key": "feed:section:posts"
+          }
+        },
+        "Config"
+      ],
+      "output_digest": "0790bfcedba0267a93cc52b989840947713cd25b22087b2131cb780ac5b360a9"
+    },
     "projects/gadget/index.html": {
       "kind": "Page",
       "route": "/projects/gadget/",
@@ -161,6 +211,11 @@
         {
           "Entry": {
             "route": "/projects/gadget/"
+          }
+        },
+        {
+          "Query": {
+            "key": "related:/projects/gadget/"
           }
         },
         "TemplateSet",
@@ -187,6 +242,25 @@
       ],
       "output_digest": "912633c7d5acb9821895cce73ee0f449ddd652b06d68c10306ec501376558341"
     },
+    "projects/index.xml": {
+      "kind": "Rss",
+      "inputs": [
+        {
+          "Query": {
+            "key": "feed:section:projects"
+          }
+        },
+        "Config"
+      ],
+      "output_digest": "4d5e7c70ddada11900149fe76eac6b7bd4d23b4d9f0defa30406b918682bba9f"
+    },
+    "robots.txt": {
+      "kind": "Robots",
+      "inputs": [
+        "Config"
+      ],
+      "output_digest": "316d29a60270c66b7555f0e80fcb9a039458be20c576cfe3c6cd73b5d68a67a2"
+    },
     "sitemap.xml": {
       "kind": "Sitemap",
       "inputs": [
@@ -212,6 +286,18 @@
         "Config"
       ],
       "output_digest": "352390e846a40b983270bf94950533b40ebd785f5daba82b4bc2057466685da2"
+    },
+    "topics/index.xml": {
+      "kind": "Rss",
+      "inputs": [
+        {
+          "Query": {
+            "key": "feed:labels"
+          }
+        },
+        "Config"
+      ],
+      "output_digest": "7cb4c91e648de94dc8aadb3715f35cebee58a85c53ad1846d27c163199c3bef7"
     },
     "topics/rust/index.html": {
       "kind": "Taxonomy",

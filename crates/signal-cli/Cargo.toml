@@ -15,10 +15,10 @@ name = "signal_cli"
 path = "src/lib.rs"
 
 [dependencies]
-signal-core = { path = "../signal-core" }
-signal-generators = { path = "../signal-generators" }
-signal-markdown = { path = "../signal-markdown" }
-signal-render = { path = "../signal-render" }
+signal-core = { workspace = true }
+signal-generators = { workspace = true }
+signal-markdown = { workspace = true }
+signal-render = { workspace = true }
 clap = { workspace = true }
 miette = { workspace = true }
 serde = { workspace = true }

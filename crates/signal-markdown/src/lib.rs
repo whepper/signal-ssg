@@ -12,6 +12,8 @@
 //!
 //! No second full Markdown AST is introduced here.
 
+#![forbid(unsafe_code)]
+
 pub mod front_matter;
 
 mod alerts;

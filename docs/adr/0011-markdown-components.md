@@ -30,9 +30,12 @@ HTML nodes before render).
 - Copy affordance is server-rendered static markup (`div.code-block` +
   `data-language` + `button[data-code-copy]`); behavior stays in site
   assets. Mermaid source is preserved as escaped text in `pre.mermaid`
-  for the site's client renderer; `has_mermaid` gates loader inclusion
+  for the site's client renderer, duplicated inside a collapsed
+  `details.mermaid-source` fallback so the diagram stays meaningful without
+  JavaScript; `has_mermaid` gates loader inclusion
   from normalized `code_blocks` metadata — templates never parse HTML.
-- Alerts are the five GitHub kinds with fixed labels; unknown markers
+- Alerts are the five GitHub kinds with fixed labels and an ARIA `role`
+  (`alert` for warning/caution, `note` for the rest); unknown markers
   stay plain blockquotes. No extension framework: three concrete
   capabilities, two private modules.
 

@@ -60,8 +60,18 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 /// template-context bytes for routes with URL-significant characters; `3`
 /// extends that encoding to front-matter image `src` values and internal
 /// menu URLs (slice 15E), which changes page bytes for images and menus
-/// with URL-significant characters.
-pub const GENERATION_BEHAVIOR_VERSION: u32 = 3;
+/// with URL-significant characters; `4` adds the `extra` and `related`
+/// context keys, ARIA roles on alerts, the Mermaid `<details>` source
+/// fallback, and opt-in Git-derived `last_modified`; `5` adds section and
+/// taxonomy-label RSS feeds (new `index.xml` artifacts under `[feed]`),
+/// opt-in robots.txt (`[robots]`), and the themed 404 artifact
+/// (`site.not_found_template`); `6` adds authored topic display order
+/// (`tag_order` in entry digests and template-visible tag lists); `7` adds
+/// hero `image`/`image_alt` to entry summaries (home heroes, cards, and
+/// every listing/term/related projection that embeds them); `8` adds
+/// opt-in HTML minification (`[output] minify_html`), a post-render output
+/// step that changes HTML bytes when enabled.
+pub const GENERATION_BEHAVIOR_VERSION: u32 = 8;
 
 /// Identity of the code that produced a manifest.
 ///
@@ -229,7 +239,10 @@ pub struct Manifest {
 /// collection + source path, and the numeric handle adds nothing semantic.
 /// The whole `body` is included — entry HTML, TOC, excerpts, and reading
 /// time each consume part of it, and splitting it further would be elegance
-/// without a consumer.
+/// without a consumer. `extra` is included: entry and section templates can
+/// render any of it via the `extra` context key. `tag_order` is included
+/// alongside `tags`: reordering terms changes eyebrows and "first topic"
+/// picks even when membership is identical.
 #[derive(Serialize)]
 struct EntryDigestInput<'a> {
     collection: &'a str,
@@ -244,9 +257,11 @@ struct EntryDigestInput<'a> {
     image: Option<&'a str>,
     image_alt: Option<&'a str>,
     tags: &'a BTreeSet<String>,
+    tag_order: &'a Vec<String>,
     featured: bool,
     section_root: bool,
     body: &'a signal_core::RenderedBody,
+    extra: &'a BTreeMap<String, serde_json::Value>,
 }
 
 /// Digest one normalized entry.
@@ -264,9 +279,11 @@ pub fn entry_digest(entry: &ContentEntry) -> Digest {
         image: entry.image.as_deref(),
         image_alt: entry.image_alt.as_deref(),
         tags: &entry.tags,
+        tag_order: &entry.tag_order,
         featured: entry.featured,
         section_root: entry.section_root,
         body: &entry.body,
+        extra: &entry.extra,
     })
 }
 
@@ -355,6 +372,89 @@ pub(crate) fn feed_limit(config: &SignalConfig) -> usize {
         .unwrap_or(signal_core::DEFAULT_FEED_LIMIT)
 }
 
+/// Effective related-entry cap: configured `[related] limit`, else the
+/// default. Shared by entry contexts and their query digests so the two
+/// can never disagree.
+pub(crate) fn related_limit(config: &SignalConfig) -> usize {
+    config
+        .related
+        .as_ref()
+        .and_then(|r| r.limit)
+        .filter(|limit| *limit > 0)
+        .unwrap_or(signal_generators::DEFAULT_RELATED_LIMIT)
+}
+
+/// Template selected for the themed not-found page, if configured.
+///
+/// Presence gates the `404.html` artifact; the output path itself is
+/// fixed (static hosts resolve unknown paths to `404.html` by convention).
+pub(crate) fn not_found_template(config: &SignalConfig) -> Option<String> {
+    config
+        .site
+        .not_found_template
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+}
+
+/// What one RSS output path *is*: the main feed, one collection's section
+/// feed, the taxonomy label-index feed, or one term feed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum FeedIdentity {
+    /// Site-wide feed at `index.xml`.
+    Main,
+    /// Feed for the collection with this name, at `<prefix>/index.xml`.
+    Section {
+        /// Collection name.
+        collection: String,
+    },
+    /// Taxonomy label-index feed at `<root>/index.xml`.
+    TaxonomyLabels,
+    /// Feed for one term slug at `<root>/<slug>/index.xml`.
+    Term {
+        /// Term URL slug.
+        slug: String,
+    },
+}
+
+/// Resolve an RSS artifact path to its feed identity from configuration.
+///
+/// Shared verbatim by artifact resolution and manifest recording, so the
+/// two can never disagree about which feed a path is. Precedence: the main
+/// feed, then the taxonomy (label-index, then term — checked first so a
+/// taxonomy rooted inside a collection prefix still resolves correctly),
+/// then collection section feeds. Unknown feed paths are `None` and fail
+/// at both use sites.
+pub(crate) fn feed_identity(path: &str, config: &SignalConfig) -> Option<FeedIdentity> {
+    if path == "index.xml" {
+        return Some(FeedIdentity::Main);
+    }
+    let owner = path.strip_suffix("/index.xml")?;
+    if let Some(root) = taxonomy_root(config) {
+        let root = root.trim_matches('/');
+        if owner == root {
+            return Some(FeedIdentity::TaxonomyLabels);
+        }
+        if let Some(slug) = owner.strip_prefix(root) {
+            let slug = slug.strip_prefix('/')?;
+            if !slug.is_empty() && !slug.contains('/') {
+                return Some(FeedIdentity::Term {
+                    slug: slug.to_string(),
+                });
+            }
+        }
+    }
+    let mut names: Vec<&String> = config.collections.keys().collect();
+    names.sort();
+    for name in names {
+        if config.route_prefix_for(name).trim_matches('/') == owner {
+            return Some(FeedIdentity::Section {
+                collection: name.clone(),
+            });
+        }
+    }
+    None
+}
+
 /// Find the collection owning a section route by matching configured route
 /// prefixes, falling back to the section-root entry at that route.
 pub(crate) fn collection_for_section_route(
@@ -372,6 +472,29 @@ pub(crate) fn collection_for_section_route(
     model
         .lookup_by_route(route)
         .map(|entry| entry.collection.0.clone())
+}
+
+/// Section display title: the section-root entry's title when present,
+/// else collection configuration, else the collection name. Shared by the
+/// section page context and the section feed channel so HTML listing and
+/// feed always agree.
+pub(crate) fn section_title(
+    config: &SignalConfig,
+    model: &SiteModel,
+    collection: &str,
+    route: &Route,
+) -> String {
+    model
+        .lookup_by_route(route)
+        .map(|entry| entry.title.clone())
+        .or_else(|| {
+            config
+                .collections
+                .get(collection)
+                .and_then(|c| c.title.clone())
+        })
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| collection.to_string())
 }
 
 /// Query keys name a projection family plus its exact parameters. Families
@@ -395,9 +518,21 @@ pub mod query_key {
     pub fn tagged(label: &str) -> String {
         format!("tagged:{label}")
     }
+    /// `related:{route}` — capped related-entry summaries for one entry.
+    pub fn related(route: &str) -> String {
+        format!("related:{route}")
+    }
     /// `feed:main` — capped main-feed items.
     pub fn feed_main() -> String {
         "feed:main".to_string()
+    }
+    /// `feed:section:{collection}` — capped items for one section feed.
+    pub fn feed_section(collection: &str) -> String {
+        format!("feed:section:{collection}")
+    }
+    /// `feed:labels` — capped term items for the taxonomy label-index feed.
+    pub fn feed_labels() -> String {
+        "feed:labels".to_string()
     }
     /// `feed:term:{slug}` — capped items for one term.
     pub fn feed_term(slug: &str) -> String {
@@ -460,9 +595,41 @@ pub(crate) fn digest_query(
             date_format,
         )));
     }
+    if let Some(route) = key.strip_prefix("related:") {
+        let entry = model
+            .lookup_by_route(&signal_core::Route::new(route.to_string()))
+            .ok_or_else(|| BuildError::Model {
+                message: format!("no entry for route {route}"),
+            })?;
+        return Ok(digest_json(&gen::related_entries(
+            model,
+            entry,
+            related_limit(config),
+            date_format,
+        )));
+    }
     if key == "feed:main" {
         return Ok(digest_json(
             &MainFeed::new(feed_limit(config)).items(model, base),
+        ));
+    }
+    if let Some(collection) = key.strip_prefix("feed:section:") {
+        let prefix = config.route_prefix_for(collection);
+        return Ok(digest_json(
+            &signal_generators::SectionFeeds::new(
+                CollectionId::new(collection.to_string()),
+                prefix,
+                feed_limit(config),
+            )
+            .items(model, base),
+        ));
+    }
+    if key == "feed:labels" {
+        let root = taxonomy_root(config).ok_or_else(|| BuildError::Model {
+            message: "label feed query without taxonomy configuration".to_string(),
+        })?;
+        return Ok(digest_json(
+            &TaxonomyFeeds::new(root, feed_limit(config)).label_items(model, base),
         ));
     }
     if let Some(slug) = key.strip_prefix("feed:term:") {
@@ -619,6 +786,12 @@ fn artifact_inputs(
                 InputRef::Entry {
                     route: entry.route.0.clone(),
                 },
+                // Related summaries consume *other* entries (their titles,
+                // dates, tags); the projection digest covers them so a
+                // change in any related entry invalidates this page.
+                InputRef::Query {
+                    key: query_key::related(&entry.route.0),
+                },
                 InputRef::TemplateSet,
                 InputRef::Config,
             ])
@@ -705,28 +878,21 @@ fn artifact_inputs(
             }
         }
         ArtifactKind::Rss => {
-            if spec.path == "index.xml" {
-                Ok(vec![
-                    InputRef::Query {
-                        key: query_key::feed_main(),
-                    },
-                    InputRef::Config,
-                ])
-            } else {
-                let slug = spec
-                    .path
-                    .strip_suffix("/index.xml")
-                    .and_then(|p| p.rsplit('/').next())
-                    .ok_or_else(|| BuildError::Model {
-                        message: format!("malformed feed path {:?}", spec.path),
-                    })?;
-                Ok(vec![
-                    InputRef::Query {
-                        key: query_key::feed_term(slug),
-                    },
-                    InputRef::Config,
-                ])
-            }
+            // One dispatch rule (shared with resolution): the path's feed
+            // identity determines the query whose consumed projection is
+            // the artifact's input.
+            let key = match feed_identity(&spec.path, config) {
+                Some(FeedIdentity::Main) => query_key::feed_main(),
+                Some(FeedIdentity::Section { collection }) => query_key::feed_section(&collection),
+                Some(FeedIdentity::TaxonomyLabels) => query_key::feed_labels(),
+                Some(FeedIdentity::Term { slug }) => query_key::feed_term(&slug),
+                None => {
+                    return Err(BuildError::Model {
+                        message: format!("unrecognized feed path {:?}", spec.path),
+                    })
+                }
+            };
+            Ok(vec![InputRef::Query { key }, InputRef::Config])
         }
         ArtifactKind::Sitemap => Ok(vec![
             InputRef::Query {
@@ -740,6 +906,11 @@ fn artifact_inputs(
         ArtifactKind::Static => Ok(vec![InputRef::Static {
             path: spec.path.clone(),
         }]),
+        // robots.txt is a pure function of the base URL (config), and the
+        // themed 404 page is rendered from the template set plus config;
+        // neither consumes entries or queries.
+        ArtifactKind::Robots => Ok(vec![InputRef::Config]),
+        ArtifactKind::NotFound => Ok(vec![InputRef::TemplateSet, InputRef::Config]),
     }
 }
 
@@ -1095,12 +1266,29 @@ mod tests {
                 e.tags.insert("New".into());
             })
         );
+        assert_ne!(
+            baseline,
+            mutate(|e| {
+                e.tag_order = vec!["B".into(), "A".into()];
+            }),
+            "display order is template-visible and must invalidate"
+        );
         assert_ne!(baseline, mutate(|e| e.featured = true));
         assert_ne!(
             baseline,
             mutate(|e| e.route = Route::new("/posts/other/".to_string()))
         );
         assert_ne!(baseline, mutate(|e| e.body.plain_text = "other".into()));
+        assert_ne!(
+            baseline,
+            mutate(|e| {
+                e.extra.insert(
+                    "repo".to_string(),
+                    serde_json::Value::String("https://example.com/r".to_string()),
+                );
+            }),
+            "extras are template-visible via the `extra` context key"
+        );
         // …while unconsumed semantic fields deliberately do not.
         assert_eq!(
             baseline,
@@ -1161,6 +1349,31 @@ mod tests {
     }
 
     #[test]
+    fn image_changes_move_listing_digests() {
+        let build = |image: Option<&str>| {
+            let mut builder = signal_core::SiteModelBuilder::new();
+            let mut alpha = entry(1, "posts", "alpha", "Alpha");
+            alpha.date = Some("2026-02-01".to_string());
+            alpha.image = image.map(str::to_string);
+            builder.add_entry(alpha);
+            builder.add_entry(entry(2, "posts", "beta", "Beta"));
+            builder.build().expect("builds")
+        };
+        let config = config();
+        // Heroes and cards render summary images, so adding or changing one
+        // must invalidate listings, term pages, and feeds that embed them.
+        let baseline = digest_query(&config, &build(None), "summaries:posts").expect("digest");
+        let with_image = digest_query(&config, &build(Some("/images/a.png")), "summaries:posts")
+            .expect("digest");
+        assert_ne!(baseline, with_image);
+        assert_ne!(
+            with_image,
+            digest_query(&config, &build(Some("/images/b.png")), "summaries:posts")
+                .expect("digest")
+        );
+    }
+
+    #[test]
     fn config_digest_tracks_relevant_changes() {
         let baseline = digest_json(&config());
         assert_eq!(baseline, digest_json(&config()));
@@ -1172,9 +1385,149 @@ mod tests {
     }
 
     #[test]
+    fn related_query_digest_tracks_other_entries() {
+        let build = |beta_tags: &[&str], beta_title: &str| {
+            let mut builder = signal_core::SiteModelBuilder::new();
+            let mut alpha = entry(1, "posts", "alpha", "Alpha");
+            alpha.route = Route::new("/posts/alpha/");
+            alpha.tags.insert("Rust".to_string());
+            builder.add_entry(alpha);
+            let mut beta = entry(2, "posts", "beta", beta_title);
+            beta.route = Route::new("/posts/beta/");
+            for tag in beta_tags {
+                beta.tags.insert(tag.to_string());
+            }
+            builder.add_entry(beta);
+            builder.build().expect("builds")
+        };
+        let config = config();
+        let key = query_key::related("/posts/alpha/");
+        // Baseline: beta shares no tag, so nothing is related.
+        let baseline = digest_query(&config, &build(&[], "Beta"), &key).expect("digest");
+        // Adding a shared tag brings beta into the projection: digest moves.
+        let overlapped = digest_query(&config, &build(&["Rust"], "Beta"), &key).expect("digest");
+        assert_ne!(baseline, overlapped);
+        // Only editing a listed field (title) of a related entry also moves
+        // the digest — pages showing the entry must rebuild.
+        let renamed =
+            digest_query(&config, &build(&["Rust"], "Beta Renamed"), &key).expect("digest");
+        assert_ne!(overlapped, renamed);
+        // Same model, same digest.
+        assert_eq!(
+            renamed,
+            digest_query(&config, &build(&["Rust"], "Beta Renamed"), &key).expect("digest")
+        );
+        // Unknown routes are errors, never silent empty digests.
+        assert!(digest_query(&config, &build(&["Rust"], "B"), "related:/posts/missing/").is_err());
+    }
+
+    #[test]
     fn unknown_query_key_is_an_error() {
         let fixture = model();
         assert!(digest_query(&config(), &fixture, "bogus:key").is_err());
+    }
+
+    #[test]
+    fn feed_identity_dispatches_every_feed_shape() {
+        let cfg = SignalConfig::from_toml_str(
+            "[site]\ntitle = \"T\"\nbase_url = \"https://example.com/\"\n[taxonomy]\nroute_prefix = \"/topics/\"\n[feed]\n[collections.posts]\nsource = \"content/posts\"\n",
+        )
+        .expect("parses");
+        assert_eq!(feed_identity("index.xml", &cfg), Some(FeedIdentity::Main));
+        assert_eq!(
+            feed_identity("posts/index.xml", &cfg),
+            Some(FeedIdentity::Section {
+                collection: "posts".to_string()
+            })
+        );
+        assert_eq!(
+            feed_identity("topics/index.xml", &cfg),
+            Some(FeedIdentity::TaxonomyLabels)
+        );
+        assert_eq!(
+            feed_identity("topics/rust/index.xml", &cfg),
+            Some(FeedIdentity::Term {
+                slug: "rust".to_string()
+            })
+        );
+        // Deeper paths and unknown owners are not feeds.
+        assert_eq!(feed_identity("topics/rust/deep/index.xml", &cfg), None);
+        assert_eq!(feed_identity("nowhere/index.xml", &cfg), None);
+        assert_eq!(feed_identity("posts/index.html", &cfg), None);
+    }
+
+    #[test]
+    fn feed_identity_prefers_taxonomy_inside_a_collection_prefix() {
+        let cfg = SignalConfig::from_toml_str(
+            "[site]\ntitle = \"T\"\n[taxonomy]\nroute_prefix = \"/blog/topics/\"\n[collections.blog]\nroute_prefix = \"/blog/\"\n",
+        )
+        .expect("parses");
+        assert_eq!(
+            feed_identity("blog/index.xml", &cfg),
+            Some(FeedIdentity::Section {
+                collection: "blog".to_string()
+            })
+        );
+        assert_eq!(
+            feed_identity("blog/topics/index.xml", &cfg),
+            Some(FeedIdentity::TaxonomyLabels)
+        );
+        assert_eq!(
+            feed_identity("blog/topics/ai/index.xml", &cfg),
+            Some(FeedIdentity::Term {
+                slug: "ai".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn section_and_label_feed_digests_track_their_projections() {
+        let cfg = SignalConfig::from_toml_str(
+            "[site]\ntitle = \"T\"\nbase_url = \"https://example.com/\"\n[taxonomy]\nroute_prefix = \"/topics/\"\n[feed]\n[collections.posts]\nsource = \"content/posts\"\n",
+        )
+        .expect("parses");
+        let base = model();
+        let retitled = {
+            let mut builder = signal_core::SiteModelBuilder::new();
+            let mut alpha = entry(1, "posts", "alpha", "Alpha Renamed");
+            alpha.description = Some("About A.".to_string());
+            alpha.date = Some("2026-02-01".to_string());
+            alpha.tags.insert("Rust".to_string());
+            alpha.body.plain_text = "Alpha body.".to_string();
+            builder.add_entry(alpha);
+            builder.add_entry(entry(2, "posts", "beta", "Beta"));
+            builder.build().expect("builds")
+        };
+        // Section feed: a member's title flows into the items projection.
+        let section = "feed:section:posts";
+        let baseline = digest_query(&cfg, &base, section).expect("digest");
+        assert_ne!(
+            baseline,
+            digest_query(&cfg, &retitled, section).expect("digest")
+        );
+        // Label feed: same membership dates and terms ⇒ same digest, even
+        // though a member title changed (labels carry term titles/dates).
+        let labels = digest_query(&cfg, &base, "feed:labels").expect("digest");
+        assert_eq!(
+            labels,
+            digest_query(&cfg, &retitled, "feed:labels").expect("digest")
+        );
+        // A new tagged member adds a term: the label digest must move.
+        let retagged = {
+            let mut builder = signal_core::SiteModelBuilder::new();
+            let mut alpha = entry(1, "posts", "alpha", "Alpha");
+            alpha.date = Some("2026-02-01".to_string());
+            alpha.tags.insert("Rust".to_string());
+            alpha.tags.insert("New Term".to_string());
+            alpha.body.plain_text = "Alpha body.".to_string();
+            builder.add_entry(alpha);
+            builder.add_entry(entry(2, "posts", "beta", "Beta"));
+            builder.build().expect("builds")
+        };
+        assert_ne!(
+            labels,
+            digest_query(&cfg, &retagged, "feed:labels").expect("digest")
+        );
     }
 
     #[test]

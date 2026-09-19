@@ -3,6 +3,7 @@
 //! This crate owns the normalized, owned representation of site content.
 //! It performs no filesystem I/O, no template rendering, and no CLI work.
 //!
+#![forbid(unsafe_code)]
 //! Design notes:
 //! - Content identity is `(collection, source-relative-path)` by default.
 //! - [`ContentId`], [`Slug`], and [`Route`] are distinct types on purpose.
@@ -23,8 +24,8 @@ pub mod model;
 pub use artifact::{ArtifactKind, ArtifactSpec};
 pub use body::{CodeBlock, Heading, RenderedBody, Toc, TocItem};
 pub use config::{
-    CollectionConfig, FeedConfig, MenuConfig, MenuItemConfig, SignalConfig, SiteConfig,
-    TaxonomyConfig, DEFAULT_FEED_LIMIT,
+    CollectionConfig, FeedConfig, GitConfig, MenuConfig, MenuItemConfig, RelatedConfig,
+    RobotsConfig, SignalConfig, SiteConfig, TaxonomyConfig, DEFAULT_FEED_LIMIT,
 };
 pub use error::CoreError;
 pub use ids::{
@@ -33,7 +34,7 @@ pub use ids::{
 };
 pub use menu::{resolve_main_menu, MenuError, MenuItem};
 pub use meta::{
-    absolute_url, canonical_url, encode_route_path, encode_url_path, format_date,
+    absolute_url, canonical_url, encode_route_path, encode_url_path, format_date, image_src_url,
     is_safe_author_url, parse_ymd, resolve_image_url, rfc2822_date, UrlUse, DEFAULT_DATE_FORMAT,
 };
-pub use model::{ContentEntry, SiteModel, SiteModelBuilder};
+pub use model::{compare_by_date_desc, ContentEntry, SiteModel, SiteModelBuilder};

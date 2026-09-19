@@ -117,18 +117,21 @@ pruning. Missing and empty directories remain valid — sources are optional.
 Symlink policy is explicit: Markdown and template discovery follow symlinks
 (a link to a directory is traversed, a link to a source file is collected),
 static discovery skips symlinks entirely, and an unresolvable link is fatal
-in all three walkers. Ingestion
-normalizes into `ContentEntry` values: identities, slug, route, title,
+in all three walkers. Ingestion normalizes into `ContentEntry` values: identities, slug, route, title,
 description, dates (validated `YYYY-MM-DD`), authorship, image references
 (safety-checked), tags,
 translation grouping, and semantic references. Front matter accepts both YAML (`---`) and
-TOML (`+++`) blocks; unknown fields are preserved verbatim for later slices.
-`_index.md`/`index.md` address the collection root. Drafts are skipped at
+TOML (`+++`) blocks; unknown fields are preserved verbatim and surfaced to
+templates through the `extra` context key. `_index.md`/`index.md` address the
+collection root. Drafts are skipped at
 ingest. Generators stay pure; resolution and writing happen in `signal-cli`
 one artifact at a time — static assets included, as planned `Static`
 specs — and every output path is validated/contained within the output
 directory. Front-matter ID as a move-surviving escape hatch is reserved,
-not implemented.
+not implemented. Git-derived `last_modified` is opt-in
+(`[git] last_modified`), resolved by `signal-cli` (the process/filesystem
+boundary) at ingest, advisory on failure, and always outranked by explicit
+front-matter `lastmod` (ADR 0024).
 
 Markdown renders to owned `RenderedBody` data in a single Comrak parse with
 AST-level transforms inside `signal-markdown`: headings gain fragment ids
@@ -180,9 +183,13 @@ not mutate the model and do not consume each other's rendered output.
 `EntryPages` (one page spec per regular entry), `SectionIndex` (one listing
 per collection), `Home` (featured hero plus recent list), `TopicsIndex` /
 `TopicTerms` (taxonomy index plus one page per term), `MainFeed` /
-`TaxonomyFeeds` (RSS from normalized data), `Sitemap`, and `Search`
-(versioned JSON index from normalized plain text) are implemented; RSS
-beyond the main and term feeds remains a future projection behind the
+`SectionFeeds` / `TaxonomyFeeds` (RSS from normalized data: main, one per
+collection, and the taxonomy label index plus one per term), `Sitemap`,
+`Robots` (a fixed allow-all policy referencing the sitemap), and `Search`
+(versioned JSON index from normalized plain text) are implemented. The
+themed not-found page (`404.html`) is planned directly from
+`site.not_found_template` (it consumes no content). RSS beyond these
+families (e.g. author feeds) remains a future projection behind the
 `Generator` trait.
 
 ## 9. ArtifactSpec
@@ -192,7 +199,7 @@ Generators plan; the CLI resolves and writes — one artifact at a time:
 ```rust
 struct ArtifactSpec {
     path: String,       // relative to output root
-    kind: ArtifactKind, // Page | CollectionIndex | Taxonomy | Rss | Sitemap | SearchIndex | Static
+    kind: ArtifactKind, // Page | CollectionIndex | Home | Taxonomy | Rss | Sitemap | SearchIndex | Static | Robots | NotFound
     route: Option<Route>,
 }
 ```
@@ -240,7 +247,7 @@ Three invariants (ADR 0014):
 |---|---|---|
 | `signal-core` | `SiteModel`, identities, queries, `ArtifactSpec`, config types, diagnostics | I/O, Comrak, templates, CLI |
 | `signal-markdown` | Comrak integration, `RenderedBody`, extraction | Leaking arena AST |
-| `signal-render` | `Renderer`, contexts, MiniJinja, recorded template set | Leaking engine types, FS/network loaders |
+| `signal-render` | `Renderer`, contexts, MiniJinja, recorded template set, post-render HTML minification | Leaking engine types, FS/network loaders |
 | `signal-generators` | `Generator`, page/section/home/taxonomy projections | Mutating model, chaining rendered output |
 | `signal-cli` | CLI, config file loading, discovery, artifact writing, orchestration, manifest | — |
 

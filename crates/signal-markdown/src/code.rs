@@ -64,13 +64,18 @@ fn is_mermaid(language: Option<&str>) -> bool {
 /// Render one fenced block to its final HTML fragment.
 ///
 /// Mermaid source is preserved verbatim as escaped text — Signal never
-/// executes it; the site's client renderer owns that. Everything else is
+/// executes it; the site's client renderer owns that. The source is emitted
+/// twice: once in `pre.mermaid` (the element client renderers target and
+/// replace) and once inside a collapsed `<details>` fallback, so the diagram
+/// intent stays readable when JavaScript is unavailable. Everything else is
 /// syntax-highlighted into class spans inside a copyable wrapper.
 fn render_fenced(language: Option<&str>, literal: &str) -> String {
     if is_mermaid(language) {
+        let source = escape_html(literal.trim_end_matches('\n'));
         return format!(
-            "<pre class=\"mermaid\">{}</pre>",
-            escape_html(literal.trim_end_matches('\n'))
+            "<figure class=\"mermaid-container\">\n<pre class=\"mermaid\">{source}</pre>\n\
+             <details class=\"mermaid-source\">\n<summary>View diagram source</summary>\n\
+             <pre><code>{source}</code></pre>\n</details>\n</figure>"
         );
     }
     let mut highlighted = Vec::new();
@@ -196,17 +201,27 @@ mod tests {
     }
 
     #[test]
-    fn mermaid_preserves_source_as_text() {
+    fn mermaid_preserves_source_with_no_js_fallback() {
         let src = "flowchart LR\n    A --> B & C\n";
         let html = render_fenced(Some("mermaid"), src);
-        assert_eq!(
-            html,
-            "<pre class=\"mermaid\">flowchart LR\n    A --&gt; B &amp; C</pre>"
+        // Render target first: client renderers replace this element.
+        assert!(
+            html.starts_with("<figure class=\"mermaid-container\">\n<pre class=\"mermaid\">flowchart LR\n    A --&gt; B &amp; C</pre>"),
+            "{html}"
         );
+        // The same escaped source is duplicated inside the collapsed
+        // fallback, so the diagram stays meaningful without JavaScript.
+        assert!(
+            html.contains(
+                "<details class=\"mermaid-source\">\n<summary>View diagram source</summary>\n<pre><code>flowchart LR\n    A --&gt; B &amp; C</code></pre>\n</details>"
+            ),
+            "{html}"
+        );
+        assert!(html.ends_with("</figure>"), "{html}");
         // Case-insensitive info match, but recorded language keeps authorship.
         let html_upper = render_fenced(Some("Mermaid"), src);
         assert!(
-            html_upper.starts_with("<pre class=\"mermaid\">"),
+            html_upper.contains("<pre class=\"mermaid\">"),
             "{html_upper}"
         );
     }
@@ -216,5 +231,7 @@ mod tests {
         let html = render_fenced(Some("mermaid"), "</pre><script>alert(1)</script>\n");
         assert!(!html.contains("</pre><script>"), "{html}");
         assert!(html.contains("&lt;/pre&gt;"), "{html}");
+        // The fallback copy is escaped identically: no second unescaped path.
+        assert_eq!(html.matches("&lt;/pre&gt;").count(), 2, "{html}");
     }
 }

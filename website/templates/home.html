@@ -14,6 +14,6 @@
 ├── static/
 └── signal.toml
 
-signal build</code></pre></div><div><p class="eyebrow">Beta</p><h2>0.1.0-beta.1</h2><p>Signal is actively evolving. Explore the current capabilities and the architecture behind them.</p><p><a href="{{ base_url }}docs/features/">Explore features →</a></p></div></section>
+signal build</code></pre></div><div><p class="eyebrow">Release</p><h2>0.2.0</h2><p>Signal is actively evolving. Explore the current capabilities and the architecture behind them.</p><p><a href="{{ base_url }}docs/features/">Explore features →</a></p></div></section>
 <section class="recent"><div class="section-heading"><p class="eyebrow">From the project</p><h2>Recent posts</h2></div>{% for e in recent %}<article class="post-card"><a href="{{ base_url }}{{ e.route }}"><h3>{{ e.title }}</h3>{% if e.description %}<p>{{ e.description }}</p>{% endif %}{% if e.date_formatted %}<small>{{ e.date_formatted }}</small>{% endif %}</a></article>{% endfor %}</section>
 {% endblock %}
