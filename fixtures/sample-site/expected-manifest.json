@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "generation": {
+    "engine_version": "0.1.0-beta.1",
+    "behavior_version": 3
+  },
+  "config_digest": "f4f8919549861db69b561a0d9d381b7dd233073131f7bff6681c7cbd090652d0",
+  "templates": {
+    "home.html": "cf11d4211bdca142163811238a1cb87a314ee44ffe720c0caf1aacc8cdac38ad",
+    "post.html": "bfb60b4fafb90df823fcbd6a69efcac7bc05fae4120ea4625ab6f9fa4f11b84b",
+    "section.html": "45dc9fd3847544743cf3f6054b1774ddb312f0c8b43a579225ab2db74744e9b7",
+    "topic.html": "b13b0163bbefb0b005ba3e9789fe98d6eb2f7a7aadce3c195807f5485d5e624c",
+    "topics.html": "17d33d4d4f3ec896c5277484356be28844cc8b449903b0a69f351650d66c1bbe"
+  },
+  "entries": {
+    "/notes/": "5b45999814611b341c0ea11e72cae0c5f22a5673c3b1c0449f94a3497ad33cd9",
+    "/posts/alpha/": "58d0e367f9aaeead93978b0926bf9a869ee4358da4bd614117c974049c38768d",
+    "/posts/beta/": "426c0243ce89828c7a46972b53f0d7a65d623c99d72314f3991170c7729b8ce6",
+    "/projects/": "c7cbd75dc77341f11f68d52b7c528355a44a206d8348f616c61566aa835d1c52",
+    "/projects/gadget/": "c9c4f4b9e22bb5364c4adf698af6febe2a256f1f1f61ac18361fb7dd5c09a84b"
+  },
+  "queries": {
+    "feed:main": "88936e1c440733f1cab07588649f62141f07f0d522db760004a98f48790d6c59",
+    "feed:term:rust": "313616062983ca435f289d410d707f688145199a9b6f0af450e750f1dd6b1c66",
+    "feed:term:systems": "88936e1c440733f1cab07588649f62141f07f0d522db760004a98f48790d6c59",
+    "home:posts": "1099a1d7e6604db4e4e9d1d67a8583c665f37289fb66b6596b0e2a54d4f4b19a",
+    "routes_inventory": "8ff655b89daeae10e9b1cb5a717ab6c623a00e9060fb879de2b1a741cbd36730",
+    "search_documents": "55a6708a5195f73ae4b0579bbfca47e79659ef10363b78f90a743945bf09a4a1",
+    "summaries:notes": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "summaries:posts": "19c380388885f68adbb681b9014086f5b9110b7a8be074dc835b1772c23da4b0",
+    "summaries:projects": "b8b4efedcbdcfb41312749180f03655fdd1ff9593e7c7ddb0cb2b2426e2f2959",
+    "tagged:Rust": "19c380388885f68adbb681b9014086f5b9110b7a8be074dc835b1772c23da4b0",
+    "tagged:Systems": "a8ee04baa6871eeacb08f7c4f8482c5e0d8f1621786b3270d7299ca656eb1dbb",
+    "topic_terms": "1610216bd93d1e6b473c4fb879d2d25855a6eca04aff954754b6dae7bdd46a51"
+  },
+  "artifacts": {
+    "images/alpha.svg": {
+      "kind": "Static",
+      "inputs": [
+        {
+          "Static": {
+            "path": "images/alpha.svg"
+          }
+        }
+      ],
+      "output_digest": "5f0a153ef3a422f751ef8d345d3623f76cd63cecd7c83d51a9f0fd919f2454bc"
+    },
+    "index.html": {
+      "kind": "Home",
+      "route": "/",
+      "inputs": [
+        {
+          "Query": {
+            "key": "home:posts"
+          }
+        },
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "b8ac161153c6ac7fea005cca3882d411a5f80e542700d60b6630d6dd6d0f15fa"
+    },
+    "index.json": {
+      "kind": "SearchIndex",
+      "inputs": [
+        {
+          "Query": {
+            "key": "search_documents"
+          }
+        }
+      ],
+      "output_digest": "40576b9b605fbec3173f119a272092bda1faddee7695694caf2a5ef5279312d8"
+    },
+    "index.xml": {
+      "kind": "Rss",
+      "inputs": [
+        {
+          "Query": {
+            "key": "feed:main"
+          }
+        },
+        "Config"
+      ],
+      "output_digest": "629c7d4a65d3c39e67c043eb21029c8fcdf414eebd6319ac0487c9dac903e9c2"
+    },
+    "js/mermaid-stub.js": {
+      "kind": "Static",
+      "inputs": [
+        {
+          "Static": {
+            "path": "js/mermaid-stub.js"
+          }
+        }
+      ],
+      "output_digest": "418521c8d17e87e4c506e6b52b3fc959721fbbb0ac2f597d1185eb7d7825f04d"
+    },
+    "notes/index.html": {
+      "kind": "CollectionIndex",
+      "route": "/notes/",
+      "inputs": [
+        {
+          "Entry": {
+            "route": "/notes/"
+          }
+        },
+        {
+          "Query": {
+            "key": "summaries:notes"
+          }
+        },
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "1a8e0a1f9a981e7f0c212ddb929ea76593d9de19bf33a8be795a242dd5e70ba9"
+    },
+    "posts/alpha/index.html": {
+      "kind": "Page",
+      "route": "/posts/alpha/",
+      "inputs": [
+        {
+          "Entry": {
+            "route": "/posts/alpha/"
+          }
+        },
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "e427b1d03a477fb1531600bc022bbe0d95eb1ee2e6c03825add97bd3d2caf18c"
+    },
+    "posts/beta/index.html": {
+      "kind": "Page",
+      "route": "/posts/beta/",
+      "inputs": [
+        {
+          "Entry": {
+            "route": "/posts/beta/"
+          }
+        },
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "b62ee7402ea2102de6e09554dec62cbe15d6464aa9dc41e474a785038bf12806"
+    },
+    "posts/index.html": {
+      "kind": "CollectionIndex",
+      "route": "/posts/",
+      "inputs": [
+        {
+          "Query": {
+            "key": "summaries:posts"
+          }
+        },
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "2363fe7646f510057ab1367eee588f2133fc1f0a2d7477bc4caa6fb4b7cabc4c"
+    },
+    "projects/gadget/index.html": {
+      "kind": "Page",
+      "route": "/projects/gadget/",
+      "inputs": [
+        {
+          "Entry": {
+            "route": "/projects/gadget/"
+          }
+        },
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "4d57ebd5469e72aadbaeee5134627fcb54f0eb1600be7168cf0fef4af4c3206a"
+    },
+    "projects/index.html": {
+      "kind": "CollectionIndex",
+      "route": "/projects/",
+      "inputs": [
+        {
+          "Entry": {
+            "route": "/projects/"
+          }
+        },
+        {
+          "Query": {
+            "key": "summaries:projects"
+          }
+        },
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "912633c7d5acb9821895cce73ee0f449ddd652b06d68c10306ec501376558341"
+    },
+    "sitemap.xml": {
+      "kind": "Sitemap",
+      "inputs": [
+        {
+          "Query": {
+            "key": "routes_inventory"
+          }
+        },
+        "Config"
+      ],
+      "output_digest": "6a7120454b3cc8a89026130fa0f2af91f5c0369510c55cd6203cb0cd198b5fd1"
+    },
+    "topics/index.html": {
+      "kind": "Taxonomy",
+      "route": "/topics/",
+      "inputs": [
+        {
+          "Query": {
+            "key": "topic_terms"
+          }
+        },
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "352390e846a40b983270bf94950533b40ebd785f5daba82b4bc2057466685da2"
+    },
+    "topics/rust/index.html": {
+      "kind": "Taxonomy",
+      "route": "/topics/rust/",
+      "inputs": [
+        {
+          "Query": {
+            "key": "tagged:Rust"
+          }
+        },
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "a614485a88d960737687aa47514eac023609b3d37fcbafb0d3c3b1c359fb4866"
+    },
+    "topics/rust/index.xml": {
+      "kind": "Rss",
+      "inputs": [
+        {
+          "Query": {
+            "key": "feed:term:rust"
+          }
+        },
+        "Config"
+      ],
+      "output_digest": "6ff311352e52cd7d5bcd7ff44fd535682485d8c5056c394394c9d7fe39f20b69"
+    },
+    "topics/systems/index.html": {
+      "kind": "Taxonomy",
+      "route": "/topics/systems/",
+      "inputs": [
+        {
+          "Query": {
+            "key": "tagged:Systems"
+          }
+        },
+        "TemplateSet",
+        "Config"
+      ],
+      "output_digest": "06c549c1b8e567418d165882b12bb433c1b7088e3a83711b779246051ab7a1f0"
+    },
+    "topics/systems/index.xml": {
+      "kind": "Rss",
+      "inputs": [
+        {
+          "Query": {
+            "key": "feed:term:systems"
+          }
+        },
+        "Config"
+      ],
+      "output_digest": "b1815d5467bfe1ccdb75ddd8b8096b599a823383bd2884be88f95804e0c7282a"
+    }
+  }
+}

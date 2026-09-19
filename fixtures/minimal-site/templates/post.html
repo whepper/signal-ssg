@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ title }}</title>
+    {% if description %}<meta name="description" content="{{ description }}" />{% endif %}
+  </head>
+  <body>
+    <article>
+      <h1>{{ title }}</h1>
+      {{ content | safe }}
+    </article>
+  </body>
+</html>

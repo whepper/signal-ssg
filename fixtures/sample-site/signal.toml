@@ -1,0 +1,42 @@
+[site]
+title = "Sample Site"
+base_url = "https://example.com/"
+home_collection = "posts"
+author = "Sample Author"
+date_format = "%-d %B %Y"
+
+[taxonomy]
+route_prefix = "/topics/"
+title = "Topics"
+
+# Feeds are explicit opt-in: the main feed plus one feed per taxonomy term,
+# capped here at 2 items to exercise truncation.
+[feed]
+limit = 2
+
+# Main navigation: home, one collection route, one taxonomy route, and one
+# external URL. Order here is display order.
+[menus.main]
+items = [
+  { label = "Home", url = "/" },
+  { label = "Posts", url = "/posts/" },
+  { label = "Topics", url = "/topics/" },
+  { label = "Elsewhere", url = "https://example.org/" },
+]
+
+[collections.posts]
+source = "content/posts"
+route_prefix = "/posts/"
+template = "post.html"
+title = "Posts"
+description = "Synthetic posts exercising dates, tags, and featured flags."
+
+[collections.projects]
+source = "content/projects"
+route_prefix = "/projects/"
+template = "post.html"
+
+[collections.notes]
+source = "content/notes"
+route_prefix = "/notes/"
+template = "post.html"

@@ -1,0 +1,7 @@
+/target/
+.signal/
+dist/
+_site/
+*.orig
+*.rej
+.DS_Store

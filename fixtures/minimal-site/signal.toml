@@ -1,0 +1,7 @@
+[site]
+title = "Minimal Site"
+base_url = "http://localhost:8000/"
+
+[collections.posts]
+source = "content/posts"
+route_prefix = "/posts/"

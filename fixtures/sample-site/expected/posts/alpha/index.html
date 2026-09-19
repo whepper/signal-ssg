@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Alpha Post · Sample Site</title>
+  <meta name="description" content="The newer featured post." />
+  <link rel="alternate" type="application/rss+xml" title="Sample Site RSS" href="https:&#x2f;&#x2f;example.com&#x2f;/index.xml" />
+  <link rel="canonical" href="https:&#x2f;&#x2f;example.com&#x2f;posts&#x2f;alpha&#x2f;" />
+  <meta property="og:title" content="Alpha Post" />
+  <meta property="og:description" content="The newer featured post." />
+  <meta property="og:url" content="https:&#x2f;&#x2f;example.com&#x2f;posts&#x2f;alpha&#x2f;" />
+  <meta property="og:type" content="article" />
+  <meta property="og:image" content="https:&#x2f;&#x2f;example.com&#x2f;images&#x2f;alpha.svg" />
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"Article","author":{"@type":"Person","name":"Guest Writer"},"dateModified":"2026-02-15","datePublished":"2026-02-01","description":"The newer featured post.","headline":"Alpha Post","image":"https://example.com/images/alpha.svg","url":"https://example.com/posts/alpha/"}</script>
+  <script src="/js/mermaid-stub.js" defer></script>
+</head>
+<body>
+  
+  <nav class="main-nav" aria-label="Main">
+    <ul>
+      
+      <li><a href="&#x2f;">Home</a></li>
+      
+      <li><a href="&#x2f;posts&#x2f;">Posts</a></li>
+      
+      <li><a href="&#x2f;topics&#x2f;">Topics</a></li>
+      
+      <li><a href="https:&#x2f;&#x2f;example.org&#x2f;">Elsewhere</a></li>
+      
+    </ul>
+  </nav>
+  
+  <article>
+    <h1>Alpha Post</h1>
+    <p class="byline">Guest Writer · <time datetime="2026-02-01">1 February 2026</time> · Updated 15 February 2026</p>
+    <figure><img src="&#x2f;images&#x2f;alpha.svg" alt="Abstract synthetic diagram" /></figure>
+    
+    <nav class="toc" aria-label="On this page">
+      <ul>
+        
+        <li><a href="#getting-started">Getting Started</a>
+          <ul>
+        <li><a href="#whats-new">What&#x27;s new?</a>
+          
+        </li>
+        </ul>
+        </li>
+        
+        <li><a href="#getting-started-1">Getting Started</a>
+          
+        </li>
+        
+        <li><a href="#über-den-tellerrand">Über den Tellerrand</a>
+          <ul>
+        <li><a href="#using-code-and-emphasis">Using code and emphasis</a>
+          
+        </li>
+        </ul>
+        </li>
+        
+        <li><a href="#field-notes-in-code">Field Notes in Code</a>
+          
+        </li>
+        
+      </ul>
+    </nav>
+    
+    <p>Synthetic body for the alpha post. It exists only to exercise ordering,
+tags, and the home hero. See also the <a href="/posts/beta/">beta post</a>.</p>
+<h2 id="getting-started">Getting Started</h2>
+<p>First steps with the synthetic example.</p>
+<h3 id="whats-new">What's new?</h3>
+<p>Punctuation folds out of fragment anchors.</p>
+<h2 id="getting-started-1">Getting Started</h2>
+<p>A repeated heading earns a deterministic <code>-1</code> suffix.</p>
+<h2 id="über-den-tellerrand">Über den Tellerrand</h2>
+<p>Unicode letters survive anchor folding.</p>
+<h3 id="using-code-and-emphasis">Using <code>code</code> and <em>emphasis</em></h3>
+<p>Inline markup strips to plain text in anchors and the TOC.</p>
+<h2 id="field-notes-in-code">Field Notes in Code</h2>
+<div class="code-block" data-language="rust"><pre><code class="language-rust"><span class="source rust"><span class="meta function rust"><span class="meta function rust"><span class="storage type function rust">fn</span> </span><span class="entity name function rust">greet</span></span><span class="meta function rust"><span class="meta function parameters rust"><span class="punctuation section parameters begin rust">(</span><span class="variable parameter rust">name</span><span class="punctuation separator rust">:</span> <span class="keyword operator rust">&amp;</span><span class="storage type rust">str</span></span><span class="meta function rust"><span class="meta function parameters rust"><span class="punctuation section parameters end rust">)</span></span></span></span><span class="meta function rust"> <span class="meta function return-type rust"><span class="punctuation separator rust">-&gt;</span> String</span> </span><span class="meta function rust"><span class="meta block rust"><span class="punctuation section block begin rust">{</span>
+    <span class="comment line double-slash rust"><span class="punctuation definition comment rust">//</span> Special chars stay escaped: &lt;div&gt; &amp; &quot;quotes&quot;
+</span>    <span class="support macro rust">format!</span><span class="meta group rust"><span class="punctuation section group begin rust">(</span></span><span class="meta group rust"><span class="string quoted double rust"><span class="punctuation definition string begin rust">&quot;</span>Hello, <span class="constant other placeholder rust">{name}</span>!<span class="punctuation definition string end rust">&quot;</span></span></span><span class="meta group rust"><span class="punctuation section group end rust">)</span></span>
+</span><span class="meta block rust"><span class="punctuation section block end rust">}</span></span></span>
+</span></code></pre><button type="button" class="code-block-copy" data-code-copy>Copy</button></div>
+<div class="code-block" data-language="python"><pre><code class="language-python"><span class="source python"><span class="meta function python"><span class="storage type function python">def</span> <span class="entity name function python"><span class="meta generic-name python">total</span></span></span><span class="meta function parameters python"><span class="punctuation section parameters begin python">(</span></span><span class="meta function parameters python"><span class="variable parameter python">items</span><span class="punctuation section parameters end python">)</span></span><span class="meta function python"><span class="punctuation section function begin python">:</span></span>
+    <span class="comment block documentation python"><span class="punctuation definition comment begin python">&quot;&quot;&quot;</span>Sum with &lt;angle&gt; brackets &amp; ampersands.<span class="punctuation definition comment end python">&quot;&quot;&quot;</span></span>
+    <span class="keyword control flow return python">return</span> <span class="meta function-call python"><span class="meta qualified-name python"><span class="support function builtin python">sum</span></span><span class="punctuation section arguments begin python">(</span><span class="meta function-call arguments python"><span class="meta qualified-name python"><span class="meta generic-name python">items</span></span></span><span class="punctuation section arguments end python">)</span></span>
+</span></code></pre><button type="button" class="code-block-copy" data-code-copy>Copy</button></div>
+<div class="code-block"><pre><code><span class="text plain">Plain fences render without language hooks.
+</span></code></pre><button type="button" class="code-block-copy" data-code-copy>Copy</button></div>
+<pre class="mermaid">flowchart LR
+    A[&quot;Start &amp; go&quot;] --&gt; B{&quot;Choose &lt;option&gt;&quot;}
+    B --&gt; C[&quot;Done&quot;]</pre>
+<aside class="alert alert-warning" data-alert="warning">
+<p class="alert-title">Warning</p>
+<p>
+Do not run untrusted snippets. Review <strong>every</strong> line before executing,
+especially piped <code>curl</code> installers.</p>
+<ul>
+<li>Prefer pinned versions.</li>
+<li>Check hashes where published.</li>
+</ul>
+</aside>
+<aside class="alert alert-tip" data-alert="tip">
+<p class="alert-title">Tip</p>
+<p>
+Keep functions small and write a <a href="/posts/beta/">test</a> for each one.</p>
+</aside>
+
+  </article>
+</body>
+</html>

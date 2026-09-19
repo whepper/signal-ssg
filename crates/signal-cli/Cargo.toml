@@ -1,0 +1,32 @@
+[package]
+name = "signal-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI, configuration loading, and build orchestration for Signal SSG"
+
+[[bin]]
+name = "signal"
+path = "src/main.rs"
+
+[lib]
+name = "signal_cli"
+path = "src/lib.rs"
+
+[dependencies]
+signal-core = { path = "../signal-core" }
+signal-generators = { path = "../signal-generators" }
+signal-markdown = { path = "../signal-markdown" }
+signal-render = { path = "../signal-render" }
+clap = { workspace = true }
+miette = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.10"
+quick-xml = { workspace = true }

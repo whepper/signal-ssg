@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "documents": [
+    {
+      "id": "/posts/alpha/",
+      "title": "Alpha Post",
+      "url": "/posts/alpha/",
+      "description": "The newer featured post.",
+      "content": "Synthetic body for the alpha post. It exists only to exercise ordering, tags, and the home hero. See also the beta post. Getting Started First steps with the synthetic example. What's new? Punctuation folds out of fragment anchors. Getting Started A repeated heading earns a deterministic -1 suffix. Über den Tellerrand Unicode letters survive anchor folding. Using code and emphasis Inline markup strips to plain text in anchors and the TOC. Field Notes in Code Do not run untrusted snippets. Review every line before executing, especially piped curl installers. Prefer pinned versions. Check hashes where published. Keep functions small and write a test for each one.",
+      "tags": [
+        "Rust",
+        "Systems"
+      ],
+      "collection": "posts",
+      "date": "2026-02-01"
+    },
+    {
+      "id": "/posts/beta/",
+      "title": "Beta Post",
+      "url": "/posts/beta/",
+      "content": "Synthetic body for the beta post. Older than alpha, sharing one topic.",
+      "tags": [
+        "Rust"
+      ],
+      "collection": "posts",
+      "date": "2026-01-01"
+    },
+    {
+      "id": "/projects/gadget/",
+      "title": "Gadget Project",
+      "url": "/projects/gadget/",
+      "description": "A cross-collection taxonomy member.",
+      "content": "Synthetic project sharing the Systems topic with the alpha post.",
+      "tags": [
+        "Systems"
+      ],
+      "collection": "projects",
+      "date": "2026-03-01"
+    }
+  ]
+}

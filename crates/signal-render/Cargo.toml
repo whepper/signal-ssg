@@ -1,0 +1,13 @@
+[package]
+name = "signal-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Renderer abstraction and MiniJinja implementation for Signal SSG"
+
+[dependencies]
+minijinja = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
