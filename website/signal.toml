@@ -1,0 +1,28 @@
+[site]
+title = "Signal"
+base_url = "https://whepper.github.io/signal-ssg/"
+home_collection = "posts"
+author = "Signal contributors"
+date_format = "%-d %B %Y"
+
+[taxonomy]
+route_prefix = "/topics/"
+title = "Topics"
+
+[feed]
+limit = 20
+
+[menus.main]
+items = [
+  { label = "Home", url = "/" },
+  { label = "Docs", url = "/docs/getting-started/" },
+  { label = "Features", url = "/features/" },
+  { label = "GitHub", url = "https://github.com/whepper/signal-ssg" },
+]
+
+[collections.posts]
+source = "content/posts"
+route_prefix = "/posts/"
+template = "post.html"
+title = "Posts"
+description = "Notes from the Signal project."

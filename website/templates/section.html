@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<section class="prose"><p class="eyebrow">Signal</p><h1>{{ title }}</h1>{% if content %}{{ content | safe }}{% endif %}<div class="listing">{% for e in entries %}<a href="{{ e.route }}"><strong>{{ e.title }}</strong>{% if e.description %}<span>{{ e.description }}</span>{% endif %}</a>{% endfor %}</div></section>{% endblock %}
