@@ -18,3 +18,64 @@ jobs:
         run: cargo test --workspace
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  website:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Signal
+        run: cargo build --release
+      - name: Build website
+        run: ./target/release/signal build --root website --out dist
+      - name: Verify generated website
+        run: |
+          set -eu
+          test -f dist/index.html
+          test -f dist/css/site.css
+          test -f dist/favicon.svg
+          test -f dist/docs/getting-started/index.html
+          test -f dist/docs/features/index.html
+          test -f dist/posts/deterministic-builds/index.html
+          test -f dist/posts/security-by-construction/index.html
+          test -f dist/index.xml
+          test -f dist/sitemap.xml
+          test -f dist/index.json
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import urllib.parse
+
+          root = pathlib.Path("dist")
+          base = "https://whepper.github.io/signal-ssg/"
+          missing = set()
+
+          for html in root.rglob("*.html"):
+              text = html.read_text(encoding="utf-8")
+              for raw in re.findall(r'''(?:href|src)="([^"]+)"''', text):
+                  url = urllib.parse.urlparse(raw)
+                  if url.scheme and url.scheme not in {"http", "https"}:
+                      continue
+                  if url.scheme in {"http", "https"} and not raw.startswith(base):
+                      continue
+                  if raw.startswith(base):
+                      path = url.path[len(urllib.parse.urlparse(base).path):]
+                  elif raw.startswith("/"):
+                      path = raw[1:].split("#", 1)[0].split("?", 1)[0]
+                  else:
+                      continue
+                  path = path.lstrip("/")
+                  if not path:
+                      target = root / "index.html"
+                  elif path.endswith("/"):
+                      target = root / path / "index.html"
+                  else:
+                      target = root / path
+                  if not target.exists():
+                      missing.add(f"{html}: {raw} -> {target}")
+
+          if missing:
+              print("Broken generated links:")
+              print("\n".join(sorted(missing)))
+              raise SystemExit(1)
+          PY
