@@ -32,13 +32,13 @@ date_format = "%-d %B %Y"
 
 `description` is the optional site-wide description, exposed to every template-rendered page as `site_description` for use as the fallback behind a page's own `description`.
 
-`base_url` is optional and is used where absolute URLs are required, including canonical metadata, feeds, sitemap data, OpenGraph metadata, and JSON-LD. Set it to the final public origin so feeds and canonical tags contain correct absolute URLs — see [Deployment](/docs/deployment/).
+`base_url` is optional and is used where absolute URLs are required, including canonical metadata, feeds, sitemap data, OpenGraph metadata, and JSON-LD. Set it to the final public origin so feeds and canonical tags contain correct absolute URLs — see [Deployment](../deployment/).
 
 `home_collection` enables generation of the home page from that collection's entries (one featured hero plus recent summaries). `home_template` defaults to `home.html`.
 
 `author` is the site-wide default author, used when an entry sets no `author` of its own.
 
-`date_format` controls presentation while stored dates remain `YYYY-MM-DD`. It accepts a strftime-style subset (`%Y`, `%m`, `%d`, `%-d`, `%B`, `%b`, `%%`); see [Templates](/docs/templates/). Formatting never depends on machine locale or timezone.
+`date_format` controls presentation while stored dates remain `YYYY-MM-DD`. It accepts a strftime-style subset (`%Y`, `%m`, `%d`, `%-d`, `%B`, `%b`, `%%`); see [Templates](../templates/). Formatting never depends on machine locale or timezone.
 
 `not_found_template` opts the site into a themed `404.html`: the named template renders at the fixed output path `404.html` (the convention static hosts use for unknown paths). The page receives `site_title`, `base_url`, and `menus` — with no route, no canonical URL, and no active menu item, because an error page is not one of the site's routes.
 
@@ -122,7 +122,7 @@ items = [
 ]
 ```
 
-Internal URLs are validated as internal routes and active state is resolved per page: the item whose normalized route equals the current page's route renders active. Templates receive the resolved menu as `menus.main`; see [Templates](/docs/templates/). Internal menu targets must resolve to generated routes — a dangling menu entry fails the build just like a broken Markdown link. See [Reference validation](/docs/validation/).
+Internal URLs are validated as internal routes and active state is resolved per page: the item whose normalized route equals the current page's route renders active. Templates receive the resolved menu as `menus.main`; see [Templates](../templates/). Internal menu targets must resolve to generated routes — a dangling menu entry fails the build just like a broken Markdown link. See [Reference validation](../validation/).
 
 ## Git metadata
 
@@ -152,4 +152,4 @@ Entry pages receive up to `limit` (default 3) related entries — the strongest 
 signal check
 ```
 
-Signal rejects invalid dates, unsafe routes, conflicting output paths, and unsupported URL schemes rather than silently rewriting them. `signal check` evaluates the same validity conditions as `signal build` without writing anything; see [Reference validation](/docs/validation/) and the [CLI reference](/docs/cli/).
+Signal rejects invalid dates, unsafe routes, conflicting output paths, and unsupported URL schemes rather than silently rewriting them. `signal check` evaluates the same validity conditions as `signal build` without writing anything; see [Reference validation](../validation/) and the [CLI reference](../cli/).

@@ -68,7 +68,7 @@ Prune:
   (none)
 ```
 
-The output is deterministic: explaining twice is byte-identical. Every reason is documented in [Incremental builds](/docs/builds/).
+The output is deterministic: explaining twice is byte-identical. Every reason is documented in [Incremental builds](../builds/).
 
 ## signal check
 
@@ -90,7 +90,7 @@ collection: posts
 references: 6 checked (1 external skipped)
 ```
 
-Exit code is nonzero when the site is invalid. The one documented exception: the output-filesystem alias probe needs an output directory, so it runs in `build`/`--explain` only. Everything else a build rejects, `check` rejects identically. See [Reference validation](/docs/validation/).
+Exit code is nonzero when the site is invalid. The one documented exception: the output-filesystem alias probe needs an output directory, so it runs in `build`/`--explain` only. Everything else a build rejects, `check` rejects identically. See [Reference validation](../validation/).
 
 ## signal serve
 

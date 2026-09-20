@@ -27,7 +27,7 @@ Static assets are precise: one changed file invalidates exactly that file.
 
 ## Rebuild reasons
 
-`signal build --explain` reports one reason per rebuild (see the [CLI reference](/docs/cli/)):
+`signal build --explain` reports one reason per rebuild (see the [CLI reference](../cli/)):
 
 | Reason | Meaning |
 |---|---|
@@ -56,4 +56,4 @@ The build is **not** whole-tree transactional: artifacts written before a mid-bu
 
 ## What the manifest is
 
-The manifest is disposable build state, like `.git/`: never publish it (see [Deployment](/docs/deployment/)), never edit it by hand, and never treat it as a source of truth that could make an invalid site look valid. Every plan check runs before the manifest is consulted, so an invalid site fails regardless of what the manifest records.
+The manifest is disposable build state, like `.git/`: never publish it (see [Deployment](../deployment/)), never edit it by hand, and never treat it as a source of truth that could make an invalid site look valid. Every plan check runs before the manifest is consulted, so an invalid site fails regardless of what the manifest records.

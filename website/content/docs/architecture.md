@@ -12,7 +12,7 @@ Signal turns a site into static artifacts through a fixed pipeline. Every comman
 | `check` | yes | yes | yes | no | no | no | no |
 | `build --explain` | yes | yes | yes | yes | no | no | no |
 
-The invariant: no command calls a site valid while skipping validation a real build requires. See the [CLI reference](/docs/cli/).
+The invariant: no command calls a site valid while skipping validation a real build requires. See the [CLI reference](../cli/).
 
 ```text
 config
@@ -60,11 +60,11 @@ Source discovery and generated artifacts are sorted. Ordered collections are use
 
 The manifest records generation identity plus relevant input and output digests. Reuse requires compatibility and matching inputs and output bytes — timestamps are never consulted.
 
-Stale outputs are derived from the previous manifest minus the current artifact plan. The full model, including per-artifact rebuild reasons, is documented in [Incremental builds](/docs/builds/).
+Stale outputs are derived from the previous manifest minus the current artifact plan. The full model, including per-artifact rebuild reasons, is documented in [Incremental builds](../builds/).
 
 ## Reference validation
 
-Structured internal references are validated against the planned output before anything is written. See [Reference validation](/docs/validation/).
+Structured internal references are validated against the planned output before anything is written. See [Reference validation](../validation/).
 
 ## Security model
 

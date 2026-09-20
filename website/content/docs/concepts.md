@@ -3,7 +3,7 @@ title: Concepts
 description: The site model, artifacts, determinism, and incremental builds.
 ---
 
-Signal treats a website as data that is compiled into static artifacts. This page explains the ideas behind the commands; hands-on material is in [Getting started](/docs/getting-started/), and command details are in the [CLI reference](/docs/cli/).
+Signal treats a website as data that is compiled into static artifacts. This page explains the ideas behind the commands; hands-on material is in [Getting started](../getting-started/), and command details are in the [CLI reference](../cli/).
 
 ## Site
 
@@ -16,11 +16,11 @@ A Signal site owns its content, templates, static assets, and `signal.toml`. The
 | `templates/` | MiniJinja HTML templates for pages, listings, taxonomy, 404 |
 | `static/` | Files copied verbatim into the output tree |
 
-See [Configuration](/docs/configuration/) and [Deployment](/docs/deployment/).
+See [Configuration](../configuration/) and [Deployment](../deployment/).
 
 ## Content
 
-Markdown files become normalized content entries. Identity, source path, slug, and output route are separate concepts: the *source* (`content/posts/hello-world.md`) is stable, the *slug* (`hello-world`) is human-readable, and the *route* (`/posts/hello-world/`) is the output address. See [Content](/docs/content/).
+Markdown files become normalized content entries. Identity, source path, slug, and output route are separate concepts: the *source* (`content/posts/hello-world.md`) is stable, the *slug* (`hello-world`) is human-readable, and the *route* (`/posts/hello-world/`) is the output address. See [Content](../content/).
 
 ## Collections
 
@@ -46,7 +46,7 @@ Artifacts can be pages, section indexes, the home page, taxonomy pages, RSS feed
 
 ## Validation before output
 
-After planning and before writing anything, Signal validates structured internal references — Markdown links and images, front-matter images, and menu targets — against the inventory of what the build will generate. A broken reference fails the build with the output tree and manifest untouched. See [Reference validation](/docs/validation/).
+After planning and before writing anything, Signal validates structured internal references — Markdown links and images, front-matter images, and menu targets — against the inventory of what the build will generate. A broken reference fails the build with the output tree and manifest untouched. See [Reference validation](../validation/).
 
 ## Determinism
 
@@ -58,11 +58,11 @@ Signal does not make performance claims yet.
 
 Successful builds write `.signal/manifest.json`. Signal can reuse an artifact only when generation is compatible, its recorded inputs still match, and the existing output still matches its recorded digest. Timestamps are never consulted.
 
-A missing or unusable manifest disables reuse and falls back to a full build. `signal build --explain` shows each decision and its reason without writing anything. The full model — inputs, reasons, pruning, failure semantics — is documented in [Incremental builds](/docs/builds/).
+A missing or unusable manifest disables reuse and falls back to a full build. `signal build --explain` shows each decision and its reason without writing anything. The full model — inputs, reasons, pruning, failure semantics — is documented in [Incremental builds](../builds/).
 
 ## Rendering
 
-Templates receive explicit values. HTML templates are auto-escaped, and the renderer does not expose filesystem or network loading. See [Templates](/docs/templates/).
+Templates receive explicit values. HTML templates are auto-escaped, and the renderer does not expose filesystem or network loading. See [Templates](../templates/).
 
 ## Static output
 

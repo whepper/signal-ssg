@@ -51,13 +51,13 @@ topics = ["Rust", "Static Sites"]
 | `topics` / `tags` | Taxonomy terms, merged (`topics` first) in authored order |
 | `slug` | Override the filename-derived slug |
 
-Invalid dates, unsafe routes, and unsupported URL schemes are rejected rather than silently rewritten — see [Reference validation](/docs/validation/).
+Invalid dates, unsafe routes, and unsupported URL schemes are rejected rather than silently rewritten — see [Reference validation](../validation/).
 
 Topic order is significant: templates render `tags` in the order written (first-occurrence deduplicated), while taxonomy indexes and term grouping use canonical sorted order either way.
 
-Unknown fields are preserved verbatim and exposed to templates through the `extra` context key (see [Templates](/docs/templates/)), so site-specific fields such as `repo` or `eyebrow` need no engine support.
+Unknown fields are preserved verbatim and exposed to templates through the `extra` context key (see [Templates](../templates/)), so site-specific fields such as `repo` or `eyebrow` need no engine support.
 
-When `[git] last_modified` is enabled, `lastmod` may also be derived from the last commit that touched the source file; an explicit front-matter `lastmod` always wins over the derived value. See [Configuration](/docs/configuration/).
+When `[git] last_modified` is enabled, `lastmod` may also be derived from the last commit that touched the source file; an explicit front-matter `lastmod` always wins over the derived value. See [Configuration](../configuration/).
 
 ## Slugs and routes
 
@@ -69,7 +69,7 @@ An entry's slug defaults to its filename (`hello-world.md` → `hello-world`); `
 
 ## Featured entries
 
-`featured: true` makes an entry eligible for the home-page hero. The home page (enabled with `site.home_collection`) renders one featured entry plus recent summaries; see [Templates](/docs/templates/) for the `featured` and `recent` values.
+`featured: true` makes an entry eligible for the home-page hero. The home page (enabled with `site.home_collection`) renders one featured entry plus recent summaries; see [Templates](../templates/) for the `featured` and `recent` values.
 
 ## Sections
 
@@ -82,9 +82,9 @@ Signal renders a deterministic Markdown subset:
 - **Headings** gain stable fragment anchors, and a table-of-contents projection is available to templates as `toc`. Duplicate headings receive deterministic unique ids.
 - **Fenced code blocks** render with syntax highlighting and a copy affordance. A `mermaid` block keeps its diagram source readable without JavaScript: the escaped source is emitted both inside `pre.mermaid` (the element a client renderer targets) and inside a collapsed `details.mermaid-source` fallback. Signal never renders diagrams itself; the site owns the Mermaid JavaScript, gated per page by the `has_mermaid` template value.
 - **Alerts** (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) render as semantic `aside` callouts with a title label and an ARIA role: `role="alert"` for the urgent `warning`/`caution` kinds, `role="note"` for the advisory kinds. Unknown designators stay ordinary blockquotes.
-- **Links and images** use inline Markdown form: `[text](/posts/deterministic-builds/)` and `![alt](/favicon.svg)`. Relative destinations and `http(s)` are allowed; executable or unsupported schemes such as `javascript:`, `data:`, and `vbscript:` are neutralized before rendering. Author raw HTML is detached at parse — it is not passed through unchanged.
+- **Links and images** use inline Markdown form: `[text](../../posts/deterministic-builds/)` and `![alt](../../favicon.svg)`. Relative destinations and `http(s)` are allowed; executable or unsupported schemes such as `javascript:`, `data:`, and `vbscript:` are neutralized before rendering. Author raw HTML is detached at parse — it is not passed through unchanged.
 
-Internal links, images, and front-matter images are validated against what the build will actually generate; a broken internal reference fails the build before anything is written. See [Reference validation](/docs/validation/).
+Internal links, images, and front-matter images are validated against what the build will actually generate; a broken internal reference fails the build before anything is written. See [Reference validation](../validation/).
 
 ## URLs
 

@@ -18,7 +18,7 @@ Each artifact kind selects its template by configuration, with a fixed default:
 | Taxonomy term | taxonomy `term_template` | `topic.html` |
 | Not-found page | `site.not_found_template` | (opt-in only) |
 
-See [Configuration](/docs/configuration/) for the corresponding tables. Feeds, the sitemap, robots.txt, and the search index never touch templates: they serialize from normalized data through fixed schemas.
+See [Configuration](../configuration/) for the corresponding tables. Feeds, the sitemap, robots.txt, and the search index never touch templates: they serialize from normalized data through fixed schemas.
 
 ## Inheritance
 
@@ -45,7 +45,7 @@ A page can extend a shared layout:
 {% endblock %}
 ```
 
-A change to *any* loaded template conservatively invalidates every template-rendered artifact (the build tracks the complete loaded set, not a per-page closure). This is deliberate: it stays sound without parsing template sources. See [Incremental builds](/docs/builds/).
+A change to *any* loaded template conservatively invalidates every template-rendered artifact (the build tracks the complete loaded set, not a per-page closure). This is deliberate: it stays sound without parsing template sources. See [Incremental builds](../builds/).
 
 ## Entry contexts
 
@@ -118,7 +118,7 @@ When `[menus.main]` is configured, every template-rendered page receives `menus.
 {% endif %}
 ```
 
-External menu URLs pass through untouched. Internal targets must resolve to generated routes — see [Reference validation](/docs/validation/).
+External menu URLs pass through untouched. Internal targets must resolve to generated routes — see [Reference validation](../validation/).
 
 ## Date formatting
 

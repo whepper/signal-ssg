@@ -32,7 +32,7 @@ The expected site-level inputs are:
 | `templates/` | MiniJinja HTML templates for pages, listings, taxonomy, 404 |
 | `static/` | Files copied verbatim into the output tree (CSS, JS, fonts, images, favicon) |
 
-Nothing else is required, and nothing site-specific lives inside Signal: all identity, structure, and presentation come from these inputs. The full option reference is in [Configuration](/docs/configuration/).
+Nothing else is required, and nothing site-specific lives inside Signal: all identity, structure, and presentation come from these inputs. The full option reference is in [Configuration](../configuration/).
 
 ## Static hosting
 
@@ -42,7 +42,7 @@ signal build --root my-site --out dist
 
 Publish the contents of `dist/` using any static hosting service.
 
-`dist/.signal/` is Signal's build state (the incremental-build manifest). It is disposable, never part of the website, and must **not** be published: exclude it from the deployment artifact, exactly like `.git/`. The public website is everything else in `dist/`. How the manifest works is explained in [Incremental builds](/docs/builds/).
+`dist/.signal/` is Signal's build state (the incremental-build manifest). It is disposable, never part of the website, and must **not** be published: exclude it from the deployment artifact, exactly like `.git/`. The public website is everything else in `dist/`. How the manifest works is explained in [Incremental builds](../builds/).
 
 Before publishing, validate:
 
@@ -50,7 +50,7 @@ Before publishing, validate:
 signal check --root my-site
 ```
 
-A broken internal reference fails the build before anything is written, so a successful build already satisfies the internal-reference invariant — see [Reference validation](/docs/validation/).
+A broken internal reference fails the build before anything is written, so a successful build already satisfies the internal-reference invariant — see [Reference validation](../validation/).
 
 ## GitHub Pages
 
@@ -81,4 +81,4 @@ Before deploying, preview exactly what hosting will serve:
 signal serve --root my-site --out dist
 ```
 
-`serve` runs the production build and serves `dist/` at `http://127.0.0.1:3000/`. See the [CLI reference](/docs/cli/).
+`serve` runs the production build and serves `dist/` at `http://127.0.0.1:3000/`. See the [CLI reference](../cli/).
