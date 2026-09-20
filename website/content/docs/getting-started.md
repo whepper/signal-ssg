@@ -1,13 +1,15 @@
 ---
 title: Getting started
-description: Build your first Signal site.
+description: Build your first Signal site, from empty directory to served website.
 ---
 
-This guide takes you from an empty directory to a generated Signal site.
+This guide takes you from an empty directory to a generated, served Signal site. By the end you will have created content, templates, and configuration, built the site, inspected the build plan, validated it, and served it locally.
+
+If you prefer reference material first, see [Concepts](/docs/concepts/), [Configuration](/docs/configuration/), [Content](/docs/content/), and [Templates](/docs/templates/). Command-line details live in the [CLI reference](/docs/cli/).
 
 ## Install
 
-Build the CLI from this repository:
+Build the CLI from the Signal repository:
 
 ```sh
 cargo build --release
@@ -19,9 +21,19 @@ The resulting binary is:
 target/release/signal
 ```
 
+Confirm it works:
+
+```sh
+target/release/signal --version
+```
+
+```text
+signal 1.0.0
+```
+
 ## Create a site
 
-Create:
+A Signal site is a directory with content, templates, static assets, and a small TOML configuration. Create:
 
 ```text
 my-site/
@@ -32,16 +44,19 @@ my-site/
 └── signal.toml
 ```
 
-Start with:
+Start with this `signal.toml`:
 
 ```toml
 [site]
 title = "My Site"
+base_url = "https://example.com/"
 
 [collections.posts]
 source = "content/posts"
 route_prefix = "/posts/"
 ```
+
+A *collection* is a named set of content with a source directory and a route prefix. Here, every Markdown file under `content/posts/` becomes a page under `/posts/`. Every option is documented in [Configuration](/docs/configuration/).
 
 ## Add content
 
@@ -57,13 +72,15 @@ description: My first Signal page.
 # Hello, Signal
 
 This page is generated from Markdown.
+
+Next, read about [deterministic builds](/posts/deterministic-builds/).
 ```
 
-Signal accepts both YAML front matter (`---`) and TOML front matter (`+++`).
+Front matter carries the page's metadata (`title` is required); the body is Markdown. Signal accepts both YAML front matter (`---`) and TOML front matter (`+++`). The full field reference is in [Content](/docs/content/).
 
-## Add a template
+## Add templates
 
-A minimal entry template is:
+A minimal entry template is `templates/post.html`:
 
 ```html
 <!doctype html>
@@ -82,6 +99,28 @@ A minimal entry template is:
 </html>
 ```
 
+Templates are MiniJinja files that receive explicit values — `title`, `site_title`, rendered `content`, and much more. `{{ content | safe }}` inserts the already-rendered Markdown body (the `safe` marker is required because HTML templates auto-escape everything else). Which template each page uses, and every available value, is documented in [Templates](/docs/templates/).
+
+You will also want a section template (`templates/section.html`) for the `/posts/` listing page. A minimal one:
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ title }} · {{ site_title }}</title>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <ul>
+  {% for e in entries %}
+    <li><a href="{{ e.route }}">{{ e.title }}</a></li>
+  {% endfor %}
+  </ul>
+</body>
+</html>
+```
+
 Set the collection's `template` to its filename when using a non-default template.
 
 ## Build
@@ -90,9 +129,25 @@ Set the collection's `template` to its filename when using a non-default templat
 target/release/signal build --root my-site --out my-site/dist
 ```
 
-Signal reports planned, reused, rebuilt, and pruned artifacts.
+Signal reports planned, reused, rebuilt, and pruned artifacts. The output is just static files — any static file server can serve the generated directory. How Signal decides what to rebuild is explained in [Incremental builds](/docs/builds/).
 
 The output is just static files. Any static file server can serve the generated directory.
+
+To preview incremental decisions without writing anything:
+
+```sh
+target/release/signal build --root my-site --out my-site/dist --explain
+```
+
+`--explain` runs the same validation as a build, then prints which artifacts would be reused, which would be rebuilt and why, and which stale outputs would be pruned.
+
+## Serve
+
+```sh
+target/release/signal serve --root my-site --out my-site/dist
+```
+
+`serve` builds once, serves the output at `http://127.0.0.1:3000/` (`--host`/`--port` override), watches source inputs, and rebuilds with the same pipeline as `build`. Failed rebuilds are reported while the previous output keeps serving. There is no live reload: refresh the browser after a rebuild.
 
 ## Validate
 
@@ -100,6 +155,14 @@ The output is just static files. Any static file server can serve the generated 
 target/release/signal check --root my-site
 ```
 
-This validates `signal.toml` and lists the configured collections.
+This validates `signal.toml`, lists the configured collections, and checks that internal references (Markdown links/images, front-matter images, menu targets) resolve to generated routes or assets. External URLs are never fetched. What is covered — and what is deliberately out of scope — is documented in [Reference validation](/docs/validation/).
 
-Next: [Concepts](../concepts/), [Configuration](../configuration/), [Content](../content/), and [Templates](../templates/).
+## Next steps
+
+- [Concepts](/docs/concepts/): the site model, artifacts, and determinism.
+- [Configuration](/docs/configuration/): every `signal.toml` option.
+- [Content](/docs/content/): front matter, Markdown features, ordering.
+- [Templates](/docs/templates/): template selection and rendering contexts.
+- [CLI reference](/docs/cli/): every command, flag, and exit code.
+- [Incremental builds](/docs/builds/): manifests, reuse reasons, pruning.
+- [Deployment](/docs/deployment/): publishing the output.
