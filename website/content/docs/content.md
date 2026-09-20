@@ -19,7 +19,7 @@ topics:
   - Rust
   - Static Sites
 featured: true
-image: /images/hello.png
+image: /favicon.svg
 image_alt: Signal logo
 ---
 ```

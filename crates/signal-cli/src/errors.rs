@@ -96,6 +96,20 @@ pub enum BuildError {
         /// alias (case-insensitive or Unicode-normalizing collision).
         second: String,
     },
+
+    /// An internal reference points nowhere Signal generates.
+    #[error("broken internal reference in {source_file:?} (route {route}): {target:?}: {reason}")]
+    #[diagnostic(code(signal::build::reference))]
+    Reference {
+        /// Source file relative to the site root, e.g. `content/posts/a.md`.
+        source_file: String,
+        /// Canonical route of the containing entry, or the menu owner.
+        route: String,
+        /// The referenced target as authored.
+        target: String,
+        /// Why the target does not resolve.
+        reason: String,
+    },
 }
 
 /// Read a file, mapping IO failures to [`BuildError::Read`].

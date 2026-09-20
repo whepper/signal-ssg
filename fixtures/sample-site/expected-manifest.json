@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generation": {
-    "engine_version": "0.2.0",
+    "engine_version": "1.0.0",
     "behavior_version": 8
   },
   "config_digest": "95567887e1440b6bd95737486b07193f3e1a556d73d45f1b4ebc331c42431187",

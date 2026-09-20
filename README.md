@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/whepper/signal-ssg/actions/workflows/ci.yml/badge.svg)](https://github.com/whepper/signal-ssg/actions/workflows/ci.yml)
 
-> **0.2.0**
+> **1.0.0**
 
 Signal is a deterministic static site generator written in Rust.
 
@@ -55,11 +55,30 @@ Or explicitly choose the site root and output directory:
 signal build --root my-site --out dist
 ```
 
-Validate a site's configuration with:
+Validate a site's configuration and internal references with:
 
 ```sh
 signal check --root my-site
 ```
+
+`check` ingests the site and verifies that Markdown links/images,
+front-matter images, and menu targets resolve to generated routes or
+assets. `signal build` enforces the same invariant before writing.
+External URLs are never fetched. Reference-style links, template-literal
+URLs, and raw HTML are currently out of scope for validation.
+
+Serve a site locally with rebuilds on source changes:
+
+```sh
+signal serve --root my-site --out dist
+```
+
+`serve` performs a normal build, serves the output over HTTP
+(`http://127.0.0.1:3000/` by default), watches `signal.toml`, content,
+templates, and static inputs, and rebuilds through the same pipeline as
+`signal build`. Failed rebuilds are reported while the previous output
+keeps serving. There is no live reload: refresh the browser after a
+rebuild.
 
 ## Configuration
 
@@ -85,6 +104,16 @@ Template-rendered artifacts depend on the **complete loaded template set**, so i
 
 A failed build leaves the previous manifest in place, but the build is not **whole-tree transactional**: artifacts that were already written are not automatically rolled back.
 
+Inspect what an incremental build would do without changing anything:
+
+```sh
+signal build --root my-site --out dist --explain
+```
+
+`--explain` runs the same validation as `build`, then prints which
+artifacts would be reused, which would be rebuilt and why, and which
+stale outputs would be pruned.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
@@ -95,13 +124,15 @@ A failed build leaves the previous manifest in place, but the build is not **who
 - [Features](docs/features.md)
 - [Deployment](docs/deployment.md)
 - [Release notes](docs/releases/)
-- [Architecture](docs/architecture.md)
+- [Architecture](../ARCHITECTURE.md)
 - [Architecture Decision Records](docs/adr/)
 - [Hugo migration notes](docs/migration/)
 
 ## Current status
 
-Signal is in beta. The current release is **0.2.0** and compatibility may change before 1.0.
+Signal 1.0 is stable. The current release is **1.0.0**: the pipeline,
+manifest schema, and CLI contract documented here are frozen, and future
+1.x releases preserve compatibility with them.
 
 Implemented today include Markdown ingestion, YAML/TOML front matter, collections, home and section pages, topics/taxonomy pages, RSS feeds (main, section, taxonomy label-index, and term), sitemap and robots.txt generation, a themed 404 page, search-index generation, related entries, template inheritance, deterministic manifests, hash-based incremental reuse, optional HTML output minification, opt-in Git-derived last-modified dates, and hardened output/path handling.
 

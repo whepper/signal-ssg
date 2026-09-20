@@ -695,238 +695,17 @@ pub(crate) fn template_digests(
     Ok(templates)
 }
 
-/// Canonical form of an input list: each reference serialized, then sorted.
-///
-/// Both sides of a comparison go through this, so construction-order
-/// differences can never cause false invalidations — only genuinely
-/// different dependency sets mismatch.
-fn canonical_inputs(inputs: &[InputRef]) -> Vec<String> {
-    let mut keys: Vec<String> = inputs
-        .iter()
-        .map(|input| serde_json::to_string(input).expect("owned inputs always serialize"))
-        .collect();
-    keys.sort();
-    keys
-}
-
-/// Digest one input reference against current build state.
-///
-/// `templates` and `config_digest` are precomputed once per build; entries
-/// and queries digest on demand from the model. Static sources hash their
-/// current bytes. Any failure (missing data, unreadable source) is an
-/// error the caller treats as "cannot prove unchanged" — never as success.
-fn current_input_digest(
-    config: &SignalConfig,
-    root: &Path,
-    model: &SiteModel,
-    templates: &BTreeMap<String, Digest>,
-    config_digest: &Digest,
-    input: &InputRef,
-) -> Result<Digest, BuildError> {
-    match input {
-        InputRef::Entry { route } => {
-            let entry = model
-                .lookup_by_route(&Route::new(route.clone()))
-                .ok_or_else(|| BuildError::Model {
-                    message: format!("no entry for route {route}"),
-                })?;
-            Ok(entry_digest(entry))
-        }
-        InputRef::Query { key } => digest_query(config, model, key),
-        InputRef::Template { name } => {
-            templates
-                .get(name)
-                .cloned()
-                .ok_or_else(|| BuildError::Model {
-                    message: format!("template {name:?} not loaded"),
-                })
-        }
-        InputRef::TemplateSet => Ok(digest_json(templates)),
-        InputRef::Config => Ok(config_digest.clone()),
-        InputRef::Static { path } => {
-            // Static resolve reads `static/<path>` under the site root;
-            // digest the same bytes. (Containment holds: spec paths passed
-            // plan validation, and this join never escapes `static/` for
-            // validated components.)
-            let source = root.join("static").join(path);
-            std::fs::read(&source).map_err(|e| BuildError::Read {
-                path: source.display().to_string(),
-                message: e.to_string(),
-            })
-        }
-        .map(|bytes| digest_bytes(&bytes)),
-    }
-}
-
-/// Derive one artifact's input references from its spec, config, and model.
-///
-/// Mirrors `resolve_artifact` exactly: entry pages name their entry; listings
-/// name their query; feeds name feed queries; statics name their source.
-/// Every template-rendered artifact names the complete loaded template set
-/// (`TemplateSet`, slice 14C) and `Config` (menus, formats, titles, URLs all
-/// flow from it); the search index names only its query (it consumes no
-/// config).
+/// Derive one artifact's input references: single source of truth lives in
+/// [`crate::build_plan::artifact_inputs`]. Canonical input-list form and
+/// per-input digests live there too, so planning (reuse decisions) and
+/// recording (the new manifest) share one contract. This wrapper keeps
+/// manifest recording compiling against that contract.
 fn artifact_inputs(
     spec: &ArtifactSpec,
     config: &SignalConfig,
     model: &SiteModel,
 ) -> Result<Vec<InputRef>, BuildError> {
-    use signal_core::ArtifactKind;
-    match spec.kind {
-        ArtifactKind::Page => {
-            let route = spec.route.as_ref().ok_or_else(|| BuildError::Model {
-                message: format!("artifact {:?} has no route", spec.path),
-            })?;
-            let entry = model
-                .lookup_by_route(route)
-                .ok_or_else(|| BuildError::Model {
-                    message: format!("no entry for route {route}"),
-                })?;
-            Ok(vec![
-                InputRef::Entry {
-                    route: entry.route.0.clone(),
-                },
-                // Related summaries consume *other* entries (their titles,
-                // dates, tags); the projection digest covers them so a
-                // change in any related entry invalidates this page.
-                InputRef::Query {
-                    key: query_key::related(&entry.route.0),
-                },
-                InputRef::TemplateSet,
-                InputRef::Config,
-            ])
-        }
-        ArtifactKind::CollectionIndex => {
-            let route = spec.route.as_ref().ok_or_else(|| BuildError::Model {
-                message: format!("artifact {:?} has no route", spec.path),
-            })?;
-            let collection =
-                collection_for_section_route(config, model, route).ok_or_else(|| {
-                    BuildError::Model {
-                        message: format!("no collection for section route {route}"),
-                    }
-                })?;
-            let mut inputs = vec![
-                InputRef::Query {
-                    key: query_key::summaries(&collection),
-                },
-                InputRef::TemplateSet,
-                InputRef::Config,
-            ];
-            if model.lookup_by_route(route).is_some() {
-                inputs.insert(
-                    0,
-                    InputRef::Entry {
-                        route: route.0.clone(),
-                    },
-                );
-            }
-            Ok(inputs)
-        }
-        ArtifactKind::Home => {
-            let collection =
-                config
-                    .site
-                    .home_collection
-                    .clone()
-                    .ok_or_else(|| BuildError::Model {
-                        message: "home artifact without home configuration".to_string(),
-                    })?;
-            Ok(vec![
-                InputRef::Query {
-                    key: query_key::home(&collection),
-                },
-                InputRef::TemplateSet,
-                InputRef::Config,
-            ])
-        }
-        ArtifactKind::Taxonomy => {
-            let route = spec.route.as_ref().ok_or_else(|| BuildError::Model {
-                message: format!("artifact {:?} has no route", spec.path),
-            })?;
-            let tax_root = taxonomy_root(config).ok_or_else(|| BuildError::Model {
-                message: "taxonomy artifact without taxonomy configuration".to_string(),
-            })?;
-            if route.0 == tax_root {
-                Ok(vec![
-                    InputRef::Query {
-                        key: query_key::topic_terms(),
-                    },
-                    InputRef::TemplateSet,
-                    InputRef::Config,
-                ])
-            } else {
-                let terms =
-                    signal_generators::topic_terms(model, &tax_root, config.date_format_str())
-                        .map_err(|e| BuildError::Model {
-                            message: e.to_string(),
-                        })?;
-                let term =
-                    terms
-                        .iter()
-                        .find(|t| t.route == route.0)
-                        .ok_or_else(|| BuildError::Model {
-                            message: format!("no topic for route {route}"),
-                        })?;
-                Ok(vec![
-                    InputRef::Query {
-                        key: query_key::tagged(&term.label),
-                    },
-                    InputRef::TemplateSet,
-                    InputRef::Config,
-                ])
-            }
-        }
-        ArtifactKind::Rss => {
-            // One dispatch rule (shared with resolution): the path's feed
-            // identity determines the query whose consumed projection is
-            // the artifact's input.
-            let key = match feed_identity(&spec.path, config) {
-                Some(FeedIdentity::Main) => query_key::feed_main(),
-                Some(FeedIdentity::Section { collection }) => query_key::feed_section(&collection),
-                Some(FeedIdentity::TaxonomyLabels) => query_key::feed_labels(),
-                Some(FeedIdentity::Term { slug }) => query_key::feed_term(&slug),
-                None => {
-                    return Err(BuildError::Model {
-                        message: format!("unrecognized feed path {:?}", spec.path),
-                    })
-                }
-            };
-            Ok(vec![InputRef::Query { key }, InputRef::Config])
-        }
-        ArtifactKind::Sitemap => Ok(vec![
-            InputRef::Query {
-                key: query_key::routes_inventory(),
-            },
-            InputRef::Config,
-        ]),
-        ArtifactKind::SearchIndex => Ok(vec![InputRef::Query {
-            key: query_key::search_documents(),
-        }]),
-        ArtifactKind::Static => Ok(vec![InputRef::Static {
-            path: spec.path.clone(),
-        }]),
-        // robots.txt is a pure function of the base URL (config), and the
-        // themed 404 page is rendered from the template set plus config;
-        // neither consumes entries or queries.
-        ArtifactKind::Robots => Ok(vec![InputRef::Config]),
-        ArtifactKind::NotFound => Ok(vec![InputRef::TemplateSet, InputRef::Config]),
-    }
-}
-
-/// Compute stale artifact paths: previous manifest records absent from the
-/// current plan, sorted.
-///
-/// Pure inventory subtraction on normalized artifact paths — no filesystem
-/// access, no dependency analysis, no graph. The caller decides what to do
-/// with the result; this function only identifies it deterministically.
-pub(crate) fn stale_artifact_paths(prev: &Manifest, specs: &[ArtifactSpec]) -> Vec<String> {
-    let current: BTreeSet<&str> = specs.iter().map(|spec| spec.path.as_str()).collect();
-    prev.artifacts
-        .keys()
-        .filter(|path| !current.contains(path.as_str()))
-        .cloned()
-        .collect()
+    crate::build_plan::artifact_inputs(spec, config, model)
 }
 
 /// Build the complete manifest for a finished plan.
@@ -1053,22 +832,13 @@ pub fn load_previous(out_dir: &Path) -> PreviousManifest {
     PreviousManifest::Usable(manifest)
 }
 
-/// Digest the existing output file, if it is a regular file.
-///
-/// Directories, symlinks, and missing or unreadable files yield `None`
-/// (→ rebuild). Never trusts mtime or size: only exact bytes.
-fn existing_output_digest(out_dir: &Path, relative: &str) -> Option<Digest> {
-    let path = out_dir.join(relative);
-    let file_type = std::fs::symlink_metadata(&path).ok()?.file_type();
-    if !file_type.is_file() {
-        return None;
-    }
-    let bytes = std::fs::read(&path).ok()?;
-    Some(digest_bytes(&bytes))
-}
-
 /// Whether `prev` was produced by generation behavior compatible with the
 /// currently running Signal.
+///
+/// Note: the existing-output digest helper lives in [`crate::build_plan`]
+/// with the rest of the reuse predicate — directories, symlinks, and
+/// missing or unreadable files yield `None` (→ rebuild); mtime and size
+/// are never trusted, only exact bytes.
 ///
 /// Exact match of both the engine version and the maintained behavior version
 /// is required. An absent identity (a manifest written before this field
@@ -1076,80 +846,6 @@ fn existing_output_digest(out_dir: &Path, relative: &str) -> Option<Digest> {
 /// schema version. A mismatch is an invalidation condition, not an error.
 pub(crate) fn generation_compatible(prev: &Manifest) -> bool {
     prev.generation.as_ref() == Some(&current_generation())
-}
-
-/// Decide whether one artifact may be reused from a previous manifest.
-///
-/// Total function: any uncertainty — generation incompatibility, missing
-/// record, kind change, input structure or digest mismatch, missing/invalid
-/// existing output — returns `false` (rebuild), never an error. Reuse
-/// requires ALL of: `prev` was produced by compatible generation behavior,
-/// the record exists under this path, the kind matches, the canonical
-/// input lists match, every current input digest matches the recorded one,
-/// and the existing output file hashes to the recorded output digest.
-///
-/// `templates` and `config_digest` are precomputed once per build and
-/// shared across artifacts; per-artifact work is its own inputs plus one
-/// output read. Takes `&SiteModel` read-only; touches the filesystem only
-/// to validate the one output file. Lookup keys are always current spec
-/// paths, so corrupt manifest paths can never redirect a read or a write.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn artifact_reusable(
-    spec: &ArtifactSpec,
-    config: &SignalConfig,
-    root: &Path,
-    model: &SiteModel,
-    templates: &BTreeMap<String, Digest>,
-    config_digest: &Digest,
-    prev: &Manifest,
-    out_dir: &Path,
-) -> bool {
-    // Build-wide compatibility gate: generation behavior is not an artifact
-    // dependency, so it is checked before any per-artifact input comparison.
-    if !generation_compatible(prev) {
-        return false;
-    }
-    let record = match prev.artifacts.get(&spec.path) {
-        Some(record) => record,
-        None => return false,
-    };
-    if record.kind != spec.kind {
-        return false;
-    }
-    let current_inputs = match artifact_inputs(spec, config, model) {
-        Ok(inputs) => inputs,
-        Err(_) => return false,
-    };
-    if canonical_inputs(&current_inputs) != canonical_inputs(&record.inputs) {
-        return false;
-    }
-    // The recorded complete template set, digested once for `TemplateSet`
-    // inputs (slice 14C).
-    let previous_template_set = digest_json(&prev.templates);
-    for input in &current_inputs {
-        let current =
-            match current_input_digest(config, root, model, templates, config_digest, input) {
-                Ok(digest) => digest,
-                Err(_) => return false,
-            };
-        let previous = match input {
-            InputRef::Entry { route } => prev.entries.get(route),
-            InputRef::Query { key } => prev.queries.get(key),
-            InputRef::Template { name } => prev.templates.get(name),
-            InputRef::TemplateSet => Some(&previous_template_set),
-            InputRef::Config => Some(&prev.config_digest),
-            // Static sources have no digest map: the recorded output
-            // digest IS the source digest (verbatim passthrough).
-            InputRef::Static { .. } => Some(&record.output_digest),
-        };
-        if previous != Some(&current) {
-            return false;
-        }
-    }
-    match existing_output_digest(out_dir, &spec.path) {
-        Some(digest) => digest == record.output_digest,
-        None => false,
-    }
 }
 
 /// Manifest JSON text: pretty-printed for reviewability, matching the
@@ -1562,18 +1258,21 @@ mod tests {
             ]),
         };
         let specs = vec![ArtifactSpec::new("keep/index.html", ArtifactKind::Page)];
-        assert_eq!(stale_artifact_paths(&prev, &specs), vec!["gone/index.html"]);
+        assert_eq!(
+            crate::build_plan::stale_artifact_paths(&prev, &specs),
+            vec!["gone/index.html"]
+        );
         // Empty plan: everything previously built is stale. Empty manifest:
         // nothing is.
         assert_eq!(
-            stale_artifact_paths(&prev, &[]),
+            crate::build_plan::stale_artifact_paths(&prev, &[]),
             vec!["gone/index.html", "keep/index.html"]
         );
         let empty = Manifest {
             artifacts: BTreeMap::new(),
             ..prev.clone()
         };
-        assert!(stale_artifact_paths(&empty, &specs).is_empty());
+        assert!(crate::build_plan::stale_artifact_paths(&empty, &specs).is_empty());
     }
 
     // --- generation identity: reuse compatibility, not schema compatibility ---

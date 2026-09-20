@@ -1,10 +1,10 @@
-//! Build orchestration: ingest → freeze → generate → plan → resolve/write →
-//! prune → manifest.
+//! Build orchestration: config → ingest → freeze → validated specs →
+//! reference validation → plan → resolve/write → prune → manifest.
 //!
-//! The lifecycle is intentionally a plain ordered enum, not a state machine:
-//! ingest, validate/normalize, freeze, generate, validate routes,
-//! render/resolve, write output. Reuse and stale pruning run inside the
-//! render/write phase and are documented in `ARCHITECTURE.md` §13.
+//! The lifecycle stages are [`PipelineStage`] (ordered enum, no state
+//! machine); the shared construction is [`pipeline`](crate::pipeline).
+//! Reuse and stale pruning run inside the execute/prune phases and are
+//! documented in `ARCHITECTURE.md` §13.
 //!
 //! Generators stay pure (`&SiteModel -> Vec<ArtifactSpec>`). Rendering and
 //! filesystem writes happen here in [`build_site`], one artifact at a time,
@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 
 use crate::discover::write_artifact;
 use crate::errors::{discovery_error, read_file, BuildError};
-use crate::ingest::{ingest_site, path_relative_unix};
+use crate::ingest::path_relative_unix;
 use crate::manifest::{
     collection_for_section_route, feed_identity, feed_limit, home_template, not_found_template,
     related_limit, section_template_for_collection, section_title, taxonomy_root, taxonomy_title,
@@ -42,6 +42,14 @@ use crate::manifest::{
 };
 
 /// Fixed pipeline lifecycle (ordered, no transitions-encoded state machine).
+///
+/// Mirrors the canonical pipeline every command shares (see
+/// [`pipeline`](crate::pipeline)): ingest, normalize, freeze, generate,
+/// structural validation (config gates, output paths, routes, templates),
+/// reference validation, incremental planning, execution, pruning, and
+/// manifest persistence. Read-only commands stop early
+/// (`check` after reference validation; `--explain` after planning) but
+/// never skip an upstream stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PipelineStage {
     /// Read sources from disk.
@@ -52,35 +60,50 @@ pub enum PipelineStage {
     Freeze,
     /// Run generators to plan [`ArtifactSpec`] values.
     Generate,
-    /// Ensure routes are unique and well-formed.
-    ValidateRoutes,
-    /// Render templates and resolve artifact contents.
-    RenderResolve,
-    /// Write output files.
-    WriteOutput,
+    /// Config gates, output-path and route validation, template loading.
+    ValidateStructure,
+    /// Structured internal-reference validation (fail-closed, pre-write).
+    ValidateReferences,
+    /// Incremental reuse/rebuild/stale decisions with reasons.
+    Plan,
+    /// Resolve and write rebuilds (reuses skip resolve+write entirely).
+    Execute,
+    /// Delete stale outputs from the previous manifest.
+    Prune,
+    /// Atomically persist the new manifest.
+    PersistManifest,
 }
 
 impl PipelineStage {
     /// All stages in execution order.
     pub fn ordered() -> Vec<PipelineStage> {
         use PipelineStage::{
-            Freeze, Generate, Ingest, RenderResolve, ValidateNormalize, ValidateRoutes, WriteOutput,
+            Execute, Freeze, Generate, Ingest, PersistManifest, Plan, Prune, ValidateNormalize,
+            ValidateReferences, ValidateStructure,
         };
         vec![
             Ingest,
             ValidateNormalize,
             Freeze,
             Generate,
-            ValidateRoutes,
-            RenderResolve,
-            WriteOutput,
+            ValidateStructure,
+            ValidateReferences,
+            Plan,
+            Execute,
+            Prune,
+            PersistManifest,
         ]
     }
 }
 
 /// Planned build: site root, output dir, and artifact specs.
+///
+/// The validated spec set every command shares: [`validated_plan`] runs the
+/// config gates, generates specs, validates output paths and routes, and
+/// loads templates. Reference validation and incremental planning happen
+/// downstream (see [`pipeline`](crate::pipeline)).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BuildPlan {
+pub struct SpecPlan {
     /// Site root (contains `signal.toml`).
     pub root: PathBuf,
     /// Output directory.
@@ -89,7 +112,7 @@ pub struct BuildPlan {
     pub specs: Vec<ArtifactSpec>,
 }
 
-impl BuildPlan {
+impl SpecPlan {
     /// Create a plan. Specs are sorted for deterministic output.
     pub fn new(root: PathBuf, out_dir: PathBuf, mut specs: Vec<ArtifactSpec>) -> Self {
         specs.sort_by(|a, b| a.path.cmp(&b.path));
@@ -103,14 +126,30 @@ impl BuildPlan {
     /// Validate that no two specs target the same output path.
     ///
     /// Two checks, in order. First, exact logical-path duplicates are
-    /// rejected without touching the filesystem. Second, the planned tree is
-    /// replicated into a transient probe directory on the output filesystem
-    /// ([`validate_filesystem_aliases`]): two distinct logical paths that
-    /// resolve to the same filesystem object — a case-insensitive or
-    /// Unicode-normalizing alias — are rejected before anything is written.
-    /// Logical route identity is unchanged; the build simply refuses an
-    /// output filesystem that cannot represent the plan distinctly.
+    /// rejected without touching the filesystem
+    /// ([`validate_output_paths_logical`](Self::validate_output_paths_logical)).
+    /// Second, the planned tree is replicated into a transient probe
+    /// directory on the output filesystem ([`validate_filesystem_aliases`]):
+    /// two distinct logical paths that resolve to the same filesystem
+    /// object — a case-insensitive or Unicode-normalizing alias — are
+    /// rejected before anything is written. Logical route identity is
+    /// unchanged; the build simply refuses an output filesystem that cannot
+    /// represent the plan distinctly.
+    ///
+    /// The filesystem probe requires the output directory and creates a
+    /// transient probe inside it (removed on return). Read-only commands
+    /// without an output directory use the logical check only; see
+    /// [`validated_plan_for_check`].
     pub fn validate_output_paths(&self) -> Result<(), BuildError> {
+        self.validate_output_paths_logical()?;
+        validate_filesystem_aliases(&self.out_dir, &self.specs)
+    }
+
+    /// Reject exact logical-path duplicates without touching the filesystem.
+    ///
+    /// Pure and read-only: shared verbatim by the full validation path and
+    /// by `signal check`, which has no output directory to probe against.
+    pub fn validate_output_paths_logical(&self) -> Result<(), BuildError> {
         let mut seen = BTreeSet::new();
         for spec in &self.specs {
             if !seen.insert(&spec.path) {
@@ -120,7 +159,7 @@ impl BuildPlan {
                 });
             }
         }
-        validate_filesystem_aliases(&self.out_dir, &self.specs)
+        Ok(())
     }
 
     /// Validate that routes backing the specs are unique.
@@ -892,28 +931,20 @@ fn resolve_static_artifact(root: &Path, spec: &ArtifactSpec) -> Result<Vec<u8>, 
     })
 }
 
-/// Run the full vertical slice: ingest → freeze → generate → render → write.
+/// Generate every planned [`ArtifactSpec`] for one model: entry pages, one
+/// section page per configured collection, the home page, taxonomy pages,
+/// feeds, sitemap, robots, the themed not-found page, the search index, and
+/// static assets.
 ///
-/// Entry pages, one section page per configured collection, and (when
-/// `site.home_collection` is set) the home page are planned as
-/// [`ArtifactSpec`] values, then each artifact is rendered and written
-/// individually; rendered pages never accumulate in memory. Output is
-/// deterministic for identical inputs.
-pub fn build_site(
+/// Shared verbatim by execution ([`build_site`]) and diagnostics
+/// (`explain::explain_site`): both construct the same spec list from the
+/// same inputs, so the explained plan is the executed plan. No rendering,
+/// writing, pruning, or manifest I/O happens here.
+pub(crate) fn generate_specs(
     root: &Path,
-    out_dir: &Path,
     config: &SignalConfig,
     model: &SiteModel,
-) -> Result<BuildSummary, BuildError> {
-    // Fail fast on invalid configuration before anything is planned:
-    // route prefixes become output path components, so they must be
-    // validated segments; menus are validated through the same pure
-    // resolution every page will use.
-    validate_config_routes(config)?;
-    if let Err(err) = signal_core::resolve_main_menu(&config.menus, &Route::new("/")) {
-        return Err(menu_config_error(root, err));
-    }
-
+) -> Result<Vec<ArtifactSpec>, BuildError> {
     let mut specs = EntryPages::new()
         .generate(model)
         .map_err(|e| BuildError::Model {
@@ -1049,66 +1080,180 @@ pub fn build_site(
     // corresponds to an ArtifactSpec, so collision validation covers them
     // and the manifest can enumerate the complete output.
     specs.extend(static_artifacts(root)?);
+    Ok(specs)
+}
 
-    let plan = BuildPlan::new(root.to_path_buf(), out_dir.to_path_buf(), specs);
+/// Fail fast on invalid configuration before anything is planned.
+///
+/// Route prefixes become output path components, so they must be validated
+/// segments; menus are validated through the same pure resolution every
+/// page will use. Shared verbatim by the full build path and by
+/// `signal check`.
+pub(crate) fn validate_config_gates(root: &Path, config: &SignalConfig) -> Result<(), BuildError> {
+    validate_config_routes(config)?;
+    if let Err(err) = signal_core::resolve_main_menu(&config.menus, &Route::new("/")) {
+        return Err(menu_config_error(root, err));
+    }
+    Ok(())
+}
+
+/// Construct the validated build plan: config gates, spec generation, output
+/// validation, and template loading.
+///
+/// Shared verbatim by execution ([`build_site`]) and diagnostics
+/// (`explain::explain_site`), so `--explain` reports the plan the build
+/// would execute — never a second implementation. Validation runs exactly
+/// as in a build, including the transient filesystem-alias probe (created
+/// and removed during validation); no artifacts are resolved or written,
+/// nothing is pruned, and no manifest is persisted here.
+pub(crate) fn validated_plan(
+    root: &Path,
+    out_dir: &Path,
+    config: &SignalConfig,
+    model: &SiteModel,
+) -> Result<(SpecPlan, MiniJinjaRenderer), BuildError> {
+    validate_config_gates(root, config)?;
+
+    let specs = generate_specs(root, config, model)?;
+    let plan = SpecPlan::new(root.to_path_buf(), out_dir.to_path_buf(), specs);
     plan.validate_output_paths()?;
     plan.validate_routes().map_err(|e| BuildError::Model {
         message: e.to_string(),
     })?;
 
     let renderer = load_templates(root)?;
-    // Reuse inputs, computed once: the previous manifest (untrusted until
-    // every check passes), plus current template and config digests shared
-    // across all per-artifact decisions.
+    Ok((plan, renderer))
+}
+
+/// Construct the validated spec set for `signal check`: the same config
+/// gates, spec generation, logical output-path validation, route
+/// validation, and template loading as [`validated_plan`], but without the
+/// filesystem-alias probe (which requires an output directory on the target
+/// filesystem) and without needing an output directory at all.
+///
+/// The probe remains build/`--explain` territory: it answers whether the
+/// *output filesystem* can represent the plan distinctly, not whether the
+/// site is structurally valid. Everything else `build` rejects, `check`
+/// rejects identically.
+pub(crate) fn validated_plan_for_check(
+    root: &Path,
+    config: &SignalConfig,
+    model: &SiteModel,
+) -> Result<(Vec<ArtifactSpec>, MiniJinjaRenderer), BuildError> {
+    validate_config_gates(root, config)?;
+
+    let specs = generate_specs(root, config, model)?;
+    // A SpecPlan with no output directory: only the filesystem-independent
+    // methods apply. The logical duplicate check and route check below are
+    // the same methods [`validated_plan`] runs — not copies — minus the
+    // output-filesystem probe, which needs a real output directory.
+    let plan = SpecPlan::new(root.to_path_buf(), PathBuf::new(), specs);
+    plan.validate_output_paths_logical()?;
+    plan.validate_routes().map_err(|e| BuildError::Model {
+        message: e.to_string(),
+    })?;
+
+    let renderer = load_templates(root)?;
+    Ok((plan.specs, renderer))
+}
+
+/// Run the full vertical slice: ingest → freeze → generate → render → write.
+///
+/// Entry pages, one section page per configured collection, and (when
+/// `site.home_collection` is set) the home page are planned as
+/// [`ArtifactSpec`] values, then each artifact is rendered and written
+/// individually; rendered pages never accumulate in memory. Output is
+/// deterministic for identical inputs.
+pub fn build_site(
+    root: &Path,
+    out_dir: &Path,
+    config: &SignalConfig,
+    model: &SiteModel,
+) -> Result<BuildSummary, BuildError> {
+    // Canonical pre-execution pipeline (shared with `explain` and `check`):
+    // validated specs, loaded templates, then reference validation — all
+    // before any execution, so a broken reference aborts with the output
+    // tree and manifest untouched, exactly like invalid content or an
+    // output collision.
+    let validated = crate::pipeline::validate_current_site(root, out_dir, config, model)?;
+    build_validated_site(
+        root,
+        out_dir,
+        config,
+        model,
+        validated.plan,
+        validated.renderer,
+    )
+}
+
+/// Execute an already-validated site state: incremental planning, then
+/// resolve/write, prune, and manifest persistence.
+///
+/// The arguments are exactly what
+/// [`validate_current_site`](crate::pipeline::validate_current_site)
+/// produces, so execution can never run on unvalidated inputs through the
+/// public pipeline. Planning determines what should happen; the loop below
+/// performs it.
+pub fn build_validated_site(
+    root: &Path,
+    out_dir: &Path,
+    config: &SignalConfig,
+    model: &SiteModel,
+    plan: SpecPlan,
+    renderer: MiniJinjaRenderer,
+) -> Result<BuildSummary, BuildError> {
+    // Planning determines what should happen; execution below performs it.
+    // The plan owns artifact inputs, per-artifact reuse/rebuild decisions
+    // (with reasons), and the stale inventory — this loop never re-derives
+    // dependencies. The previous manifest is untrusted until every plan
+    // check passes; without a usable one every decision rebuilds.
     let previous = crate::manifest::load_previous(out_dir);
     let usable_prev = match &previous {
         crate::manifest::PreviousManifest::Usable(manifest) => Some(manifest),
         _ => None,
     };
-    let current_templates = crate::manifest::template_digests(&renderer)?;
-    let current_config_digest = crate::manifest::config_digest(config);
+    let planned = crate::build_plan::plan(
+        &plan.specs,
+        config,
+        model,
+        &renderer,
+        root,
+        out_dir,
+        &previous,
+    )?;
     let mut pages_written = 0;
     let mut reused = 0;
     let mut rebuilt = 0;
     let mut rebuilt_paths = Vec::new();
     let mut outputs = std::collections::BTreeMap::new();
-    for spec in &plan.specs {
+    for decision in &planned.decisions {
+        use crate::build_plan::BuildDecision;
         // Every artifact resolves independently from (spec, config, model):
         // structured serializers for data artifacts, the renderer for HTML,
         // and a source read for statics. No generated HTML is ever read
-        // back, and no loop-local state is consulted. Reusable artifacts
-        // skip resolve and write entirely; their recorded output digest
-        // carries forward into the new manifest.
-        let reusable = match usable_prev {
-            Some(prev) => crate::manifest::artifact_reusable(
+        // back, and no loop-local state is consulted. Reused artifacts skip
+        // resolve and write entirely; their recorded output digest carries
+        // forward into the new manifest.
+        match decision {
+            BuildDecision::Reuse {
                 spec,
-                config,
-                root,
-                model,
-                &current_templates,
-                &current_config_digest,
-                prev,
-                out_dir,
-            ),
-            None => false,
-        };
-        if reusable {
-            let record = usable_prev
-                .and_then(|prev| prev.artifacts.get(&spec.path))
-                .expect("reusable implies a previous record");
-            outputs.insert(spec.path.clone(), record.output_digest.clone());
-            reused += 1;
-            continue;
+                output_digest,
+            } => {
+                outputs.insert(spec.path.clone(), output_digest.clone());
+                reused += 1;
+            }
+            BuildDecision::Rebuild { spec, .. } => {
+                let bytes = resolve_artifact(spec, config, root, model, &renderer)?;
+                outputs.insert(spec.path.clone(), crate::manifest::digest_bytes(&bytes));
+                write_artifact(out_dir, &spec.path, &bytes).map_err(|e| BuildError::Write {
+                    path: out_dir.join(&spec.path).display().to_string(),
+                    message: e.to_string(),
+                })?;
+                pages_written += 1;
+                rebuilt += 1;
+                rebuilt_paths.push(spec.path.clone());
+            }
         }
-        let bytes = resolve_artifact(spec, config, root, model, &renderer)?;
-        outputs.insert(spec.path.clone(), crate::manifest::digest_bytes(&bytes));
-        write_artifact(out_dir, &spec.path, &bytes).map_err(|e| BuildError::Write {
-            path: out_dir.join(&spec.path).display().to_string(),
-            message: e.to_string(),
-        })?;
-        pages_written += 1;
-        rebuilt += 1;
-        rebuilt_paths.push(spec.path.clone());
     }
 
     // The manifest records the completed build only: every artifact above
@@ -1120,11 +1265,12 @@ pub fn build_site(
     // manifest describes exactly the output tree it accompanies. Pruning
     // runs only against a usable previous manifest — never from corrupt
     // metadata — and only after all current artifacts wrote successfully.
-    // Invalid stale paths are skipped, never followed; anything else that
-    // fails safe-deletion fails the build, leaving the old manifest intact.
+    // The stale inventory comes from the plan above; invalid stale paths
+    // are skipped, never followed; anything else that fails safe-deletion
+    // fails the build, leaving the old manifest intact.
     let mut pruned = 0;
     let mut pruned_paths = Vec::new();
-    if let Some(prev) = usable_prev {
+    if usable_prev.is_some() {
         // Filesystem identities of every artifact the current plan claims.
         // Current artifacts were just written (or validated for reuse), so
         // they exist. A stale path that resolves to the same filesystem
@@ -1136,25 +1282,25 @@ pub fn build_site(
             .iter()
             .filter_map(|spec| crate::discover::file_identity(&out_dir.join(&spec.path)))
             .collect();
-        for stale in crate::manifest::stale_artifact_paths(prev, &plan.specs) {
+        for stale in &planned.stale {
             // Untrusted manifest metadata must never fail — or redirect — a
             // valid build: invalid stale paths are skipped, and the record
             // drops out of the new manifest below.
-            if !crate::discover::is_safe_artifact_path(&stale) {
+            if !crate::discover::is_safe_artifact_path(stale) {
                 continue;
             }
             // Refuse a stale path that is the same filesystem object as any
             // current artifact. On an ambiguous identity we skip rather than
             // risk deleting a current artifact.
-            if let Some(identity) = crate::discover::file_identity(&out_dir.join(&stale)) {
+            if let Some(identity) = crate::discover::file_identity(&out_dir.join(stale)) {
                 if current_identities.contains(&identity) {
                     continue;
                 }
             }
-            match crate::discover::remove_artifact(out_dir, &stale) {
+            match crate::discover::remove_artifact(out_dir, stale) {
                 Ok(true) => {
                     pruned += 1;
-                    pruned_paths.push(stale);
+                    pruned_paths.push(stale.clone());
                 }
                 Ok(false) => {
                     // Already absent: filesystem already reconciled, and the
@@ -1162,7 +1308,7 @@ pub fn build_site(
                 }
                 Err(e) => {
                     return Err(BuildError::Write {
-                        path: out_dir.join(&stale).display().to_string(),
+                        path: out_dir.join(stale).display().to_string(),
                         message: format!("could not remove stale artifact: {e}"),
                     });
                 }
@@ -1463,12 +1609,15 @@ fn resolve_feed(
                     spec.path
                 ),
             })?;
-            let terms =
-                topic_terms(model, &root, signal_core::DEFAULT_DATE_FORMAT).map_err(|e| {
-                    BuildError::Model {
-                        message: e.to_string(),
-                    }
-                })?;
+            let terms = topic_terms(model, &root, config.date_format_str()).map_err(|e| {
+                BuildError::Model {
+                    message: e.to_string(),
+                }
+            })?;
+            // NOTE: only slug/label/route are read here (all
+            // date-format-independent); member items are re-derived via
+            // `term_items` below, matching the digest's `feed:term:`
+            // projection.
             let term = terms
                 .iter()
                 .find(|t| t.slug == slug)
@@ -1563,28 +1712,43 @@ fn resolve_sitemap(
 /// Convenience: ingest from disk and build in one call (used by the CLI and
 /// the golden test).
 pub fn build_site_from_disk(root: &Path, out_dir: &Path) -> Result<BuildSummary, BuildError> {
-    let config_path = root.join("signal.toml");
-    let text = read_file(&config_path)?;
-    let config: SignalConfig = toml::from_str(&text)
-        .map_err(|e| crate::config::config_parse_error(&config_path, &text, e))?;
-    let (model, drafts_skipped) = ingest_site(root, &config)?;
-    let mut summary = build_site(root, out_dir, &config, &model)?;
-    summary.drafts_skipped = drafts_skipped;
+    let loaded = crate::pipeline::load_validated_site(root, out_dir)?;
+    // Execution from the already-validated state: plan, resolve/write,
+    // prune, persist. Split from validation so the read-only commands can
+    // share the prefix without duplicating it.
+    let mut summary = build_validated_site(
+        root,
+        out_dir,
+        &loaded.config,
+        &loaded.model,
+        loaded.validated.plan,
+        loaded.validated.renderer,
+    )?;
+    summary.drafts_skipped = loaded.drafts_skipped;
     Ok(summary)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingest::ingest_site;
     use signal_core::{ArtifactKind, Route};
     use std::fs;
 
     #[test]
     fn pipeline_order_is_fixed() {
         let stages = PipelineStage::ordered();
-        assert_eq!(stages.len(), 7);
+        assert_eq!(stages.len(), 10);
         assert_eq!(stages[0], PipelineStage::Ingest);
-        assert_eq!(stages[stages.len() - 1], PipelineStage::WriteOutput);
+        assert_eq!(stages[stages.len() - 1], PipelineStage::PersistManifest);
+        // Reference validation precedes planning precedes execution:
+        // the ordering this enum exists to pin.
+        let pos = |s: PipelineStage| stages.iter().position(|x| *x == s).expect("stage");
+        assert!(pos(PipelineStage::ValidateStructure) < pos(PipelineStage::ValidateReferences));
+        assert!(pos(PipelineStage::ValidateReferences) < pos(PipelineStage::Plan));
+        assert!(pos(PipelineStage::Plan) < pos(PipelineStage::Execute));
+        assert!(pos(PipelineStage::Execute) < pos(PipelineStage::Prune));
+        assert!(pos(PipelineStage::Prune) < pos(PipelineStage::PersistManifest));
         let mut sorted = stages.clone();
         sorted.sort();
         // Ordered() must already be in enum order; guards accidental reorder.
@@ -1592,8 +1756,107 @@ mod tests {
     }
 
     #[test]
+    fn unconsumed_entry_fields_do_not_affect_resolved_bytes() {
+        // Mechanical guard for the input/resolution contract: `references`,
+        // `language`, and `translation_group` are excluded from
+        // `EntryDigestInput` on the grounds that no artifact consumes them.
+        // This test resolves every spec against the base model and again
+        // against a model where ONLY those fields changed, and requires
+        // byte-identical output. If a future resolver starts consuming one
+        // of these fields, this test fails — forcing the field into the
+        // digest and the artifact's declared inputs — instead of silently
+        // serving stale reuse.
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\nbase_url = \"https://example.com/\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n[taxonomy]\nroute_prefix = \"/topics/\"\n[feed]\n",
+                ),
+                (
+                    "content/posts/a.md",
+                    "---\ntitle: A\ndate: 2026-02-01\ntopics: [\"Rust\"]\n---\n\nA body.\n",
+                ),
+                (
+                    "content/posts/b.md",
+                    "---\ntitle: B\ndate: 2026-03-01\ntopics: [\"Rust\"]\n---\n\nB body.\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html><body>{{ title }}{{ content | safe }}</body></html>",
+                ),
+                (
+                    "templates/section.html",
+                    "<html><body>section</body></html>",
+                ),
+                (
+                    "templates/topics.html",
+                    "<html><body>topics</body></html>",
+                ),
+                (
+                    "templates/topic.html",
+                    "<html><body>topic</body></html>",
+                ),
+            ],
+        );
+        let config: SignalConfig = toml::from_str(
+            &std::fs::read_to_string(dir.path().join("signal.toml")).expect("config text"),
+        )
+        .expect("config parses");
+        let (model, _) = crate::ingest::ingest_site(dir.path(), &config).expect("model");
+        let renderer = load_templates(dir.path()).expect("renderer");
+        let specs = generate_specs(dir.path(), &config, &model).expect("specs");
+        let base: Vec<Vec<u8>> = specs
+            .iter()
+            .map(|spec| {
+                resolve_artifact(spec, &config, dir.path(), &model, &renderer).expect("resolves")
+            })
+            .collect();
+
+        // Mutate ONLY the digest-excluded fields. References must still
+        // validate, so entries reference each other rather than dangling.
+        let routes: Vec<Route> = {
+            let mut routes: Vec<Route> = model.entries().map(|e| e.route.clone()).collect();
+            routes.sort();
+            routes
+        };
+        let mut builder = signal_core::SiteModelBuilder::new();
+        for mut entry in model.entries().cloned() {
+            entry.translation_group = Some("group-1".to_string());
+            entry.language = Some("nl".to_string());
+            entry.references = routes
+                .iter()
+                .filter(|r| **r != entry.route)
+                .take(1)
+                .map(|r| model.lookup_by_route(r).expect("route exists").id)
+                .collect();
+            // Digests must not move either (pinned explicitly here so the
+            // rendering assertion below cannot pass while digests drift).
+            assert_eq!(
+                crate::manifest::entry_digest(&entry),
+                crate::manifest::entry_digest(
+                    model.lookup_by_route(&entry.route).expect("route exists")
+                ),
+                "excluded fields must not affect the entry digest"
+            );
+            builder.add_entry(entry);
+        }
+        let mutated = builder.build().expect("mutated model builds");
+        for (spec, expected) in specs.iter().zip(base.iter()) {
+            let actual =
+                resolve_artifact(spec, &config, dir.path(), &mutated, &renderer).expect("resolves");
+            assert_eq!(
+                &actual, expected,
+                "spec {} changed when only unconsumed fields changed",
+                spec.path
+            );
+        }
+    }
+
+    #[test]
     fn output_collisions_are_detected() {
-        let plan = BuildPlan::new(
+        let plan = SpecPlan::new(
             PathBuf::from("/root"),
             PathBuf::from("/out"),
             vec![
@@ -2378,6 +2641,7 @@ mod tests {
                     "templates/section.html",
                     "<html><body>section</body></html>",
                 ),
+                ("static/images/a.svg", "<svg></svg>\n"),
             ],
         );
     }
@@ -2653,7 +2917,7 @@ mod tests {
                 (
                     "signal.toml",
                     &format!(
-                        "[site]\ntitle = \"T\"\n{menu_toml}\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n"
+                        "[site]\ntitle = \"T\"\nhome_collection = \"posts\"\n{menu_toml}\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n"
                     ),
                 ),
                 ("content/posts/a.md", "---\ntitle: A\n---\n\nA.\n"),
@@ -2664,6 +2928,10 @@ mod tests {
                 (
                     "templates/section.html",
                     "<html><body>{% if menus %}<nav>{% for item in menus.main %}[{{ item.label }}:{{ item.url }}:{{ item.active }}]{% endfor %}</nav>{% endif %}section</body></html>",
+                ),
+                (
+                    "templates/home.html",
+                    "<html><body>home</body></html>",
                 ),
             ],
         );
@@ -3788,21 +4056,25 @@ mod tests {
         }
 
         fn decide(&self, path: &str, manifest: &crate::manifest::Manifest) -> bool {
-            use crate::manifest::{artifact_reusable, config_digest, template_digests};
+            use crate::build_plan::{decide_artifact, BuildDecision};
+            use crate::manifest::{config_digest, template_digests};
             let spec = self
                 .specs
                 .iter()
                 .find(|s| s.path == path)
                 .expect("spec exists");
-            artifact_reusable(
-                spec,
-                &self.config,
-                &self.root,
-                &self.model,
-                &template_digests(&self.renderer).expect("digests"),
-                &config_digest(&self.config),
-                manifest,
-                &self.out,
+            matches!(
+                decide_artifact(
+                    spec,
+                    &self.config,
+                    &self.root,
+                    &self.model,
+                    &template_digests(&self.renderer).expect("digests"),
+                    &config_digest(&self.config),
+                    manifest,
+                    &self.out,
+                ),
+                BuildDecision::Reuse { .. }
             )
         }
     }
@@ -4691,7 +4963,7 @@ mod tests {
         // could not hold both), but the plan validator still rejects the
         // combination deterministically on every platform, before any write.
         let dir = tempfile::tempdir().expect("tempdir");
-        let plan = BuildPlan::new(
+        let plan = SpecPlan::new(
             dir.path().join("site"),
             dir.path().join("out"),
             vec![
@@ -4717,7 +4989,7 @@ mod tests {
         // `A` (file) and `a/b.txt` (file): on a case-insensitive filesystem
         // the folded name blocks the subdirectory exactly like an exact one.
         let dir = tempfile::tempdir().expect("tempdir");
-        let plan = BuildPlan::new(
+        let plan = SpecPlan::new(
             dir.path().join("site"),
             dir.path().join("out"),
             vec![
@@ -5505,7 +5777,7 @@ mod tests {
                 ),
                 (
                     "content/posts/x.md",
-                    "---\ntitle: X\n---\n\n[js](javascript:alert(1)) [data](data:text/html,x) [vb](vbscript:x)\n\n![img](javascript:alert(2))\n\n[safe](/ok) and <javascript:alert(3)>\n",
+                    "---\ntitle: X\n---\n\n[js](javascript:alert(1)) [data](data:text/html,x) [vb](vbscript:x)\n\n![img](javascript:alert(2))\n\n[safe](/posts/) and <javascript:alert(3)>\n",
                 ),
                 (
                     "templates/post.html",
@@ -5535,7 +5807,7 @@ mod tests {
             );
         }
         assert!(
-            html.contains("href=\"/ok\"") && html.contains("safe"),
+            html.contains("href=\"/posts/\"") && html.contains("safe"),
             "safe link must survive: {html}"
         );
     }

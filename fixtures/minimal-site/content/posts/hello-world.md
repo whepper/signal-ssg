@@ -11,4 +11,4 @@ This is the minimal fixture post. It exists to prove the pipeline shape:
 Markdown -> normalized data -> ArtifactSpec -> rendered page
 ```
 
-See [the architecture](../../ARCHITECTURE.md) for why Markdown stays at the boundary.
+See [the posts index](/posts/) for the rendered shape.

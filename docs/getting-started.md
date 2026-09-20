@@ -91,12 +91,33 @@ Signal reports planned, reused, rebuilt, and pruned artifacts.
 
 The output is just static files. Any static file server can serve the generated directory.
 
+To preview incremental decisions without writing anything:
+
+```sh
+target/release/signal build --root my-site --out my-site/dist --explain
+```
+
+## Serve
+
+```sh
+target/release/signal serve --root my-site --out my-site/dist
+```
+
+`serve` builds once, serves the output at `http://127.0.0.1:3000/`
+(`--host`/`--port` override), watches source inputs, and rebuilds with
+the same pipeline as `build`. Failed rebuilds are reported while the
+previous output keeps serving. There is no live reload: refresh the
+browser after a rebuild.
+
 ## Validate
 
 ```sh
 target/release/signal check --root my-site
 ```
 
-This validates `signal.toml` and lists the configured collections.
+This validates `signal.toml`, lists the configured collections, and checks
+that internal references (Markdown links/images, front-matter images, menu
+targets) resolve to generated routes or assets. External URLs are never
+fetched.
 
 Next: [Concepts](concepts.md), [Configuration](configuration.md), [Content](content.md), and [Templates](templates.md).

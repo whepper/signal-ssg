@@ -155,9 +155,10 @@ fn validate_external(label: &str, url: &str, scheme: &str) -> Result<String, Men
 /// item in configuration order and marks the item whose normalized route
 /// equals the normalized current route as active.
 ///
-/// Items are never validated against generated routes: a menu may point at
-/// any syntactically valid route, keeping navigation independent of which
-/// pages happen to exist.
+/// Items are shape-validated here (syntactically valid routes, normalized
+/// and encoded identically everywhere); existence against generated routes
+/// is validated downstream by `signal-cli::link_check`, which fails a build
+/// or `signal check` on an internal menu target nothing generates.
 pub fn resolve_main_menu(
     menus: &BTreeMap<String, MenuConfig>,
     current: &Route,

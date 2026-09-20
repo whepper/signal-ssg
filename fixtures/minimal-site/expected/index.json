@@ -6,7 +6,7 @@
       "title": "Hello, World",
       "url": "/posts/hello-world/",
       "description": "The minimal Signal fixture post.",
-      "content": "This is the minimal fixture post. It exists to prove the pipeline shape: See the architecture for why Markdown stays at the boundary.",
+      "content": "This is the minimal fixture post. It exists to prove the pipeline shape: See the posts index for the rendered shape.",
       "tags": [
         "hello"
       ],

@@ -3,22 +3,44 @@
 Signal is a deterministic static site **compiler**:
 
 ```text
-sources
+config
   ↓
-ingestion
+ingest
   ↓
-validation
+validated specs (config gates, output paths, routes, templates)
   ↓
-immutable SiteModel
+reference validation
   ↓
-queries / generators
+incremental BuildPlan
   ↓
-ArtifactSpec
+execute
   ↓
-rendering / artifact resolution
+prune
   ↓
-output
+manifest
 ```
+
+One canonical pre-execution pipeline lives in `signal-cli::pipeline`
+and is shared verbatim by every command. Commands stop at different
+stages but never skip an upstream one:
+
+| Command         | Ingest | Structural validation | Reference validation | Plan | Execute | Prune | Manifest |
+| --------------- | ------ | --------------------- | -------------------- | ---- | ------- | ----- | -------- |
+| `build`         | yes    | yes                   | yes                  | yes  | yes     | yes   | yes      |
+| `serve`         | yes    | yes                   | yes                  | yes  | yes     | yes   | yes      |
+| `check`         | yes    | yes                   | yes                  | no   | no      | no    | no       |
+| `build --explain` | yes  | yes                   | yes                  | yes  | no      | no    | no       |
+
+The invariant: a command must not call a site valid while skipping
+validation a real build requires. `check` and `--explain` are read-only
+(no writes, no pruning, no manifest mutation). The single documented
+exception is the output-filesystem alias probe: it answers whether a
+specific output filesystem can represent the plan distinctly, so it runs
+in `build`/`--explain` (which take an output directory) but not in
+`check` (which takes none). Every other build rejection — invalid config
+routes, menu shape, logical output collisions, route collisions, template
+failures, broken references — surfaces identically in all three commands
+(pinned by `crates/signal-cli/tests/pipeline.rs`).
 
 Signal is not a web framework. There is no request handling, no dynamic
 runtime, and no server-side behavior. All decisions below serve deterministic
@@ -104,6 +126,22 @@ the complete loaded template set (`InputRef::TemplateSet`), and one build-wide
 compatibility field gates reuse. Recording, reuse, and pruning are described
 in `docs/adr/0015`, `0016`, `0017`, `0019`, and `0020`; there is no graph of
 any kind.
+
+Planning lives in `signal-cli::build_plan`: `artifact_inputs()` is the single
+source of truth for what an artifact consumes (shared by reuse decisions and
+manifest recording), `plan()` turns current state plus the previous manifest
+into explicit per-artifact `Reuse`/`Rebuild{reason}` decisions plus the stale
+inventory, and `build_site` executes those decisions without redefining them.
+Build planning derives the canonical inputs and reuse decisions for each
+artifact; execution consumes those decisions without independently redefining
+the dependency contract. Resolution (`resolve_artifact`) remains a procedural
+mirror of the declared inputs — see the contract table in `build_plan.rs`.
+
+The plan can be surfaced read-only via `signal build --explain`
+(`signal-cli::explain`): it constructs the same `BuildPlan` execution
+would use (through the shared `signal-cli::pipeline` prefix, including
+reference validation), renders reuse/rebuild reasons plus the stale list,
+and exits without resolving, writing, pruning, or persisting the manifest.
 
 ## 6. Ingestion
 
@@ -265,9 +303,17 @@ contains no timestamps, runtime IDs, environment values, or machine paths.
 
 Golden-tree tests assert byte-identical public output and manifest bytes
 across independent builds, and clean-vs-incremental equivalence for identical
-inputs. Those assertions hold on the test platforms; behavior that depends on
-filesystem semantics (case/Unicode aliasing, symlink handling) can differ by
-platform and is tested where the platform exhibits it.
+inputs. Date formatting is locale- and timezone-independent by construction
+(`signal_core::format_date` implements a fixed strftime subset over
+`YYYY-MM-DD` strings with an internal month table — no libc, no `TZ`
+dependence). Generation identity contains no timestamps, runtime IDs,
+environment values, or machine paths.
+
+Platform qualifications (deliberate, not gaps): behavior that depends on
+filesystem semantics (case/Unicode aliasing, symlink handling, file-identity
+comparison) can differ by platform and is tested where the platform exhibits
+it. CI runs the suite on Ubuntu and macOS; universal cross-platform byte
+identity is not claimed beyond that matrix.
 
 ## 12. Security boundaries
 
@@ -340,7 +386,31 @@ template set invalidates every template-rendered artifact (ADR 0020). There is
 no per-artifact `{% extends %}` / `{% include %}` closure and no template-source
 parser. Finer config scoping remains a possible future refinement.
 
-## 14. Explicitly deferred
+## 14. Serve
+
+`signal serve` (`signal-cli::serve`) is a thin synchronous loop over the
+production pipeline: initial `build_site_from_disk`, then `notify`-driven
+re-invocation of the same function on coalesced source changes
+(`signal.toml`, collection sources, `templates/`, `static/`, plus `.git`
+only with opt-in git dates), serving the output directory with a blocking
+HTTP server. The configured output tree is never watched, so Signal's own
+writes cannot retrigger builds. Failures are reported while last-known-good
+output keeps serving; recovery is via the next manifest-driven build, as
+with `signal build`. No live reload, no async runtime, no second renderer.
+
+## 15. Reference validation
+
+`signal-cli::link_check` validates structured internal references
+(`RenderedBody.links/images`, front-matter images, internal menu targets)
+against the in-memory inventory of planned routes, files, static assets,
+and entry heading ids. It runs after `validated_plan()` and before any
+write/prune/manifest step, so a broken reference fails closed like invalid
+content; `signal check` runs the same validation without building.
+External destinations are classified and skipped (never fetched).
+Reference-style/autolink Markdown forms, template-literal URLs, and raw
+HTML are outside the structured model and intentionally unchecked.
+
+## 16. Explicitly deferred
 
 Plugins (WASM/native/dynamic), remote content/caching, image processing, i18n,
 a search engine or UI (only the static index exists), CMS integration, dynamic

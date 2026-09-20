@@ -6,7 +6,22 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Determinism evidence beyond one platform: the suite must pass on
+        # case-insensitive/normalizing macOS filesystems as well as Linux.
+        # Universal cross-platform byte identity is not claimed; see
+        # ARCHITECTURE.md §11 for the scoped qualifications.
+        os: [ubuntu-latest, macos-latest]
+        # Date formatting is libc- and TZ-independent by construction
+        # (`signal_core::format_date`); run once outside UTC to pin it.
+        tz: ["UTC"]
+        include:
+          - os: ubuntu-latest
+            tz: "Pacific/Kiritimati"
+    runs-on: ${{ matrix.os }}
+    env:
+      TZ: ${{ matrix.tz }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
