@@ -31,6 +31,26 @@ pub enum ArtifactKind {
     SearchIndex,
     /// Static passthrough (copied verbatim from `static/`).
     Static,
+    /// Generated image derivative (A2, ADR 0029): a resized WebP rendering
+    /// of a content-referenced raster source, e.g. `images/hero-640.webp`
+    /// derived from `static/images/hero.jpg`.
+    ///
+    /// Unlike [`ArtifactKind::Static`], output bytes never equal source
+    /// bytes: the spec's `(source, width, format)` identity resolves
+    /// through the image producer (`signal-cli::images`), and reuse
+    /// compares the *source* digest (via the manifest `assets` map) while
+    /// parameters ride the input reference itself.
+    DerivedImage,
+    /// Generated social card (A5, ADR 0032): one deterministic PNG per
+    /// participating entry page, rendered from page metadata plus an
+    /// optional hero image, e.g. `social/posts/example.png`.
+    ///
+    /// Identity is the page's route, inverted from the output path
+    /// (`signal_core::social_image_route`), exactly as `DerivedImage`
+    /// inverts its own path. Inputs are the page's entry digest, the
+    /// configuration (dimensions, site identity), and the hero source
+    /// bytes when one is composited — never the page's HTML digest.
+    SocialImage,
     /// `robots.txt`, derived from configuration (base URL). Not a route:
     /// crawlers fetch it at a fixed path, so it is planned and resolved
     /// like the sitemap but with its own content rules.

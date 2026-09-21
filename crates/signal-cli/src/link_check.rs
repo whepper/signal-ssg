@@ -530,6 +530,12 @@ pub struct CheckReport {
     pub collections: Vec<String>,
     /// Reference validation activity.
     pub references: ReferenceReport,
+    /// Asset inventory activity (pure derivation over specs + model).
+    pub assets: crate::assets::AssetReport,
+    /// Advisory diagnostics over the publishing model (A6): evidence-based
+    /// observations only. Never errors — a site that fails validation never
+    /// reaches this report.
+    pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
 }
 
 /// Load, ingest, structurally validate, and reference-validate without
@@ -545,6 +551,11 @@ pub struct CheckReport {
 /// template failures, broken references) surfaces here identically.
 pub fn check_site_from_disk(root: &Path) -> Result<CheckReport, BuildError> {
     let loaded = crate::pipeline::load_validated_check(root)?;
+    let assets = crate::assets::build_asset_report(&loaded.validated.specs, &loaded.model);
+    // A6 diagnostics: the same analysis `explain` renders, derived from the
+    // specs and model `check` just validated. Advisory and infallible.
+    let diagnostics =
+        crate::diagnostics::analyze(root, &loaded.config, &loaded.model, &loaded.validated.specs);
     Ok(CheckReport {
         title: loaded.config.site.title.clone(),
         collections: loaded
@@ -554,6 +565,8 @@ pub fn check_site_from_disk(root: &Path) -> Result<CheckReport, BuildError> {
             .map(|id| id.0.clone())
             .collect(),
         references: loaded.validated.references,
+        assets,
+        diagnostics,
     })
 }
 

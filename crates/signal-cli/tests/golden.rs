@@ -483,7 +483,38 @@ fn manifest_covers_plan_and_output_exactly() {
                     );
                 }
                 signal_cli::manifest::InputRef::Static { path: source } => {
-                    assert_eq!(source, path, "static input must name its source file");
+                    use signal_core::ArtifactKind;
+                    let spec = summary
+                        .specs
+                        .iter()
+                        .find(|s| &s.path == path)
+                        .expect("spec exists");
+                    if spec.kind == ArtifactKind::Static {
+                        assert_eq!(source, path, "static input must name its source file");
+                    } else {
+                        // A1 asset edge: pages (and section pages rendering
+                        // a section root) name the source assets they embed.
+                        assert!(
+                            summary
+                                .specs
+                                .iter()
+                                .any(|s| s.kind == ArtifactKind::Static && &s.path == source),
+                            "{path} references unplanned asset {source}"
+                        );
+                    }
+                }
+                signal_cli::manifest::InputRef::DerivedImage { source, .. } => {
+                    // A2 derivative edge: the named source is a planned
+                    // static asset, and the referencing artifact is either
+                    // the derivative itself or an embedding page/section.
+                    use signal_core::ArtifactKind;
+                    assert!(
+                        summary
+                            .specs
+                            .iter()
+                            .any(|s| s.kind == ArtifactKind::Static && &s.path == source),
+                        "{path} references unplanned derivative source {source}"
+                    );
                 }
             }
         }

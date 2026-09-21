@@ -360,6 +360,10 @@ pub struct BuildSummary {
     pub drafts_skipped: usize,
     /// Static files copied verbatim.
     pub static_files: usize,
+    /// Generated image derivatives (resized WebP).
+    pub derived_images: usize,
+    /// Generated social cards (one PNG per participating page).
+    pub social_images: usize,
     /// The complete set of artifacts the build produced. Every output file
     /// corresponds to one of these specs — this is the enumerable output
     /// contract the build manifest records.
@@ -511,6 +515,15 @@ fn entry_context(
         if let Some(alt) = &entry.image_alt {
             ctx.insert("image_alt", alt);
         }
+        // Responsive hero (A3): the same source expressed as planned
+        // derivatives, for templates that opt in with
+        // `{% if responsive_image %}`. The plain `image` key above is
+        // untouched, so existing templates render byte-identical output.
+        if let Some(hero) =
+            crate::responsive::responsive_hero(root, config, image, entry.image_alt.as_deref())?
+        {
+            ctx.insert("responsive_image", hero);
+        }
     }
     // Site-specific front matter survives verbatim: templates read
     // `extra.<field>` (e.g. `extra.repo`) without engine changes per field.
@@ -519,7 +532,13 @@ fn entry_context(
     if !entry.extra.is_empty() {
         ctx.insert("extra", &entry.extra);
     }
-    ctx.insert("content", &entry.body.html);
+    // Responsive body images (A3): Comrak `<img>` tags whose sources
+    // have planned derivatives gain srcset/sizes/dimensions; every other
+    // tag passes through byte-identical. The consumed derivative inputs
+    // are already declared on this artifact (A2), so no input change.
+    let content =
+        crate::responsive::rewrite_body_images(&entry.body.html, &entry.route.0, config, root)?;
+    ctx.insert("content", content);
     // URL-path form: templates render `route` directly into links, so
     // URL-significant characters arrive already encoded. The logical route
     // stays typed (`&Route`) everywhere identity matters (menus, lookups,
@@ -585,8 +604,29 @@ fn entry_context(
         ctx.insert("og_url", canonical);
     }
     ctx.insert("og_type", "article");
-    if let Some(image_absolute) = &image_absolute {
-        ctx.insert("og_image", image_absolute);
+    // A generated social card (A5, ADR 0032) is purpose-built for
+    // sharing, so it supersedes the hero image in Open Graph metadata and
+    // supplies the Twitter card keys. `image_absolute_url` and `json_ld`
+    // deliberately keep the article's own hero: structured data describes
+    // the article's image, the share preview describes the card.
+    let social = crate::social::page_social_metadata(config, entry);
+    match &social {
+        Some(social) => {
+            ctx.insert("og_image", &social.absolute_url);
+            ctx.insert("twitter_card", "summary_large_image");
+            ctx.insert("twitter_title", &entry.title);
+            if let Some(description) = &entry.description {
+                ctx.insert("twitter_description", description);
+            }
+            ctx.insert("twitter_image", &social.absolute_url);
+            ctx.insert("social_image", social);
+        }
+        // Unchanged A4 behavior: the hero's absolute URL, when one exists.
+        None => {
+            if let Some(image_absolute) = &image_absolute {
+                ctx.insert("og_image", image_absolute);
+            }
+        }
     }
     ctx.insert(
         "json_ld",
@@ -632,6 +672,15 @@ fn section_context(
     let content = section_root
         .map(|e| e.body.html.clone())
         .unwrap_or_default();
+    // Section-root bodies render responsive images exactly like entry
+    // bodies (A3); the section artifact already names the root entry's
+    // derivative inputs (A2).
+    let content = match section_root {
+        Some(section_root) => {
+            crate::responsive::rewrite_body_images(&content, &section_root.route.0, config, root)?
+        }
+        None => content,
+    };
 
     let mut ctx = RenderContext::new();
     ctx.insert("site_title", site_title);
@@ -931,6 +980,123 @@ fn resolve_static_artifact(root: &Path, spec: &ArtifactSpec) -> Result<Vec<u8>, 
     })
 }
 
+/// Plan generated image derivatives as first-class [`ArtifactSpec`]s
+/// (A2, ADR 0029).
+///
+/// Pure over config plus model: one `{stem}-{width}.webp` spec per
+/// content-referenced raster source per configured width, in
+/// deterministic output-path order. No bytes are read during planning;
+/// source probing (exists, decodable) happens in
+/// [`validate_derivative_sources`], which runs identically on the build
+/// and check paths.
+fn derivative_artifacts(
+    config: &SignalConfig,
+    model: &SiteModel,
+) -> Result<Vec<ArtifactSpec>, BuildError> {
+    let mut specs = Vec::new();
+    for deriv in crate::images::planned_derivatives(config, model)? {
+        specs.push(ArtifactSpec::new(
+            deriv.output_path(),
+            ArtifactKind::DerivedImage,
+        ));
+    }
+    Ok(specs)
+}
+
+/// Validate every planned derivative source: it exists under `static/`
+/// and decodes as a raster image (A2, ADR 0029).
+///
+/// Shared verbatim by [`validated_plan`] and [`validated_plan_for_check`]
+/// (called after spec generation in both), so `build`, `check`, and
+/// `explain` fail identically on missing, unsupported, or malformed
+/// sources — before any write, prune, or manifest step. Read-only.
+fn validate_derivative_sources(
+    root: &Path,
+    specs: &[ArtifactSpec],
+    config: &SignalConfig,
+    model: &SiteModel,
+) -> Result<(), BuildError> {
+    crate::images::validate_derivative_sources(root, specs, config, model)
+}
+
+/// Plan generated social cards as first-class [`ArtifactSpec`]s
+/// (A5, ADR 0032).
+///
+/// Pure over config plus model: one `social/<route-path>.png` spec per
+/// participating entry page, in deterministic order. No bytes are read
+/// during planning; hero probing happens in
+/// [`validate_social_sources`], which runs identically on the build and
+/// check paths. The spec deliberately carries no route: routes are unique
+/// per artifact (a page already claims `/posts/a/`), and identity is
+/// inverted from the output path exactly like `DerivedImage`.
+fn social_artifacts(
+    config: &SignalConfig,
+    model: &SiteModel,
+) -> Result<Vec<ArtifactSpec>, BuildError> {
+    let Some((width, height)) = config.social_size() else {
+        return Ok(Vec::new());
+    };
+    // Range validation happens in the shared config gates; a size that
+    // somehow reaches planning out of range is a planner disagreement.
+    if width == 0
+        || height == 0
+        || width > signal_core::MAX_SOCIAL_DIMENSION
+        || height > signal_core::MAX_SOCIAL_DIMENSION
+    {
+        return Err(BuildError::Model {
+            message: format!(
+                "invalid [social] dimensions {width}×{height}: both axes must be within 1..={}",
+                signal_core::MAX_SOCIAL_DIMENSION
+            ),
+        });
+    }
+    let mut specs = Vec::new();
+    for entry in model.entries() {
+        if !signal_core::social_image_eligible(config, entry) {
+            continue;
+        }
+        specs.push(ArtifactSpec::new(
+            signal_core::social_image_path(&entry.route.0),
+            ArtifactKind::SocialImage,
+        ));
+    }
+    Ok(specs)
+}
+
+/// Validate every planned social card's composited hero source: it exists
+/// under `static/` and decodes as a raster image (A5, ADR 0032).
+///
+/// Shared verbatim by [`validated_plan`] and [`validated_plan_for_check`]
+/// (after spec generation in both), so `build`, `check`, and `explain`
+/// fail identically on a missing or malformed hero — before any write,
+/// prune, or manifest step. Read-only. Cards without a composited hero
+/// (no hero, a non-raster hero, an external hero) probe nothing.
+fn validate_social_sources(
+    root: &Path,
+    specs: &[ArtifactSpec],
+    model: &SiteModel,
+) -> Result<(), BuildError> {
+    let mut sources = std::collections::BTreeSet::new();
+    for spec in specs {
+        if spec.kind != ArtifactKind::SocialImage {
+            continue;
+        }
+        if let Some(hero) = crate::social::planned_social(model, &spec.path)?.hero {
+            sources.insert(hero);
+        }
+    }
+    for source in sources {
+        let (bytes, actual) = crate::images::read_source_bytes(root, &source)?;
+        if let Err(message) = crate::images::probe_dimensions(&bytes) {
+            return Err(BuildError::Read {
+                path: root.join("static").join(&actual).display().to_string(),
+                message: format!("could not decode social hero {source:?}: {message}"),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Generate every planned [`ArtifactSpec`] for one model: entry pages, one
 /// section page per configured collection, the home page, taxonomy pages,
 /// feeds, sitemap, robots, the themed not-found page, the search index, and
@@ -1080,6 +1246,16 @@ pub(crate) fn generate_specs(
     // corresponds to an ArtifactSpec, so collision validation covers them
     // and the manifest can enumerate the complete output.
     specs.extend(static_artifacts(root)?);
+    // Generated image derivatives (A2): planned from content references
+    // plus `[images]` configuration. They join the same spec list, so
+    // output-collision validation (derivative vs static, derivative vs
+    // derivative across sources) runs before anything is written.
+    specs.extend(derivative_artifacts(config, model)?);
+    // Generated social cards (A5): one PNG per participating entry page,
+    // planned from page identity plus `[social]` configuration. They join
+    // the same spec list, so output collisions (card vs static, card vs
+    // page, card vs card) fail before anything is written.
+    specs.extend(social_artifacts(config, model)?);
     Ok(specs)
 }
 
@@ -1087,12 +1263,79 @@ pub(crate) fn generate_specs(
 ///
 /// Route prefixes become output path components, so they must be validated
 /// segments; menus are validated through the same pure resolution every
-/// page will use. Shared verbatim by the full build path and by
-/// `signal check`.
+/// page will use; image derivative requests are validated while no bytes
+/// are read (supported format, non-zero widths). Shared verbatim by the
+/// full build path and by `signal check`.
 pub(crate) fn validate_config_gates(root: &Path, config: &SignalConfig) -> Result<(), BuildError> {
     validate_config_routes(config)?;
     if let Err(err) = signal_core::resolve_main_menu(&config.menus, &Route::new("/")) {
         return Err(menu_config_error(root, err));
+    }
+    validate_images_config(config)?;
+    validate_social_config(config)?;
+    Ok(())
+}
+
+/// Validate the `[social]` surface (A5, ADR 0032).
+///
+/// Pure: dimension sanity plus the absolute-URL requirement. Social
+/// metadata must be publicly resolvable, so an enabled `[social]` table
+/// without `site.base_url` fails the build and `check` identically —
+/// the feeds precedent — rather than silently emitting a relative
+/// `og:image`. Hero decodability needs file bytes and is probed
+/// separately in [`validate_social_sources`].
+fn validate_social_config(config: &SignalConfig) -> Result<(), BuildError> {
+    let Some((width, height)) = config.social_size() else {
+        return Ok(());
+    };
+    if width == 0
+        || height == 0
+        || width > signal_core::MAX_SOCIAL_DIMENSION
+        || height > signal_core::MAX_SOCIAL_DIMENSION
+    {
+        return Err(BuildError::Model {
+            message: format!(
+                "invalid [social] configuration: width and height must be within 1..={} (got {width}×{height})",
+                signal_core::MAX_SOCIAL_DIMENSION
+            ),
+        });
+    }
+    if config
+        .site
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        return Err(BuildError::Model {
+            message: "[social] requires site.base_url for absolute Open Graph image URLs"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Validate the `[images]` derivative request surface (A2, ADR 0029;
+/// multi-format since A4, ADR 0031).
+///
+/// Pure: format support and width sanity only. Source existence and
+/// decodability need file bytes and are probed separately in
+/// [`validate_derivative_sources`], after spec generation, on both the
+/// build and check paths.
+fn validate_images_config(config: &SignalConfig) -> Result<(), BuildError> {
+    let Some(requested) = config.images.as_ref() else {
+        return Ok(());
+    };
+    // One source of truth for format validity and the `format`/`formats`
+    // ambiguity: the same function planning enumerates through, so the
+    // gate can never reject a shape planning would accept (or vice versa).
+    crate::images::configured_formats(config)?;
+    if requested.widths.contains(&0) {
+        return Err(BuildError::Model {
+            message: "invalid [images] configuration: derivative width must be at least 1"
+                .to_string(),
+        });
     }
     Ok(())
 }
@@ -1115,6 +1358,8 @@ pub(crate) fn validated_plan(
     validate_config_gates(root, config)?;
 
     let specs = generate_specs(root, config, model)?;
+    validate_derivative_sources(root, &specs, config, model)?;
+    validate_social_sources(root, &specs, model)?;
     let plan = SpecPlan::new(root.to_path_buf(), out_dir.to_path_buf(), specs);
     plan.validate_output_paths()?;
     plan.validate_routes().map_err(|e| BuildError::Model {
@@ -1143,6 +1388,8 @@ pub(crate) fn validated_plan_for_check(
     validate_config_gates(root, config)?;
 
     let specs = generate_specs(root, config, model)?;
+    validate_derivative_sources(root, &specs, config, model)?;
+    validate_social_sources(root, &specs, model)?;
     // A SpecPlan with no output directory: only the filesystem-independent
     // methods apply. The logical duplicate check and route check below are
     // the same methods [`validated_plan`] runs — not copies — minus the
@@ -1324,10 +1571,22 @@ pub fn build_validated_site(
         .iter()
         .filter(|spec| spec.kind == ArtifactKind::Static)
         .count();
+    let derived_images = plan
+        .specs
+        .iter()
+        .filter(|spec| spec.kind == ArtifactKind::DerivedImage)
+        .count();
+    let social_images = plan
+        .specs
+        .iter()
+        .filter(|spec| spec.kind == ArtifactKind::SocialImage)
+        .count();
     Ok(BuildSummary {
         pages_written,
         drafts_skipped: 0,
         static_files,
+        derived_images,
+        social_images,
         specs: plan.specs,
         reused,
         rebuilt,
@@ -1511,6 +1770,10 @@ pub fn resolve_artifact(
             resolve_not_found(config, root, renderer)?,
         )),
         ArtifactKind::Static => resolve_static_artifact(root, spec),
+        ArtifactKind::DerivedImage => {
+            crate::images::resolve_derived_image(root, spec, config, model)
+        }
+        ArtifactKind::SocialImage => crate::social::resolve_social_image(root, spec, config, model),
         _ => Ok(finalize_html(
             config,
             resolve_html_artifact(spec, config, root, model, renderer)?,

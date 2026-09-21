@@ -1,0 +1,527 @@
+//! Responsive images (A3, ADR 0030; `<picture>`/AVIF since A4,
+//! ADR 0031): rendering integration tests.
+//!
+//! Body-image rewriting, hero contexts, dependency lifecycles (pages and
+//! sections), format lifecycles, backward compatibility, and determinism —
+//! all against runtime-generated raster fixtures (no binary blobs).
+
+use image::ImageEncoder as _;
+use signal_cli::build::build_site_from_disk;
+use std::path::{Path, PathBuf};
+
+fn write_site(dir: &Path, files: &[(&str, &str)]) {
+    for (rel, content) in files {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(path, content).expect("write");
+    }
+}
+
+fn write_bytes(dir: &Path, rel: &str, bytes: &[u8]) {
+    let path = dir.join(rel);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+    std::fs::write(path, bytes).expect("write");
+}
+
+/// Deterministic W × H RGB gradient PNG, encoded in-test.
+fn gradient_png(width: u32, height: u32) -> Vec<u8> {
+    let mut image = image::RgbImage::new(width, height);
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        pixel.0 = [(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8];
+    }
+    let mut bytes = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut bytes)
+        .write_image(
+            image.as_raw(),
+            width,
+            height,
+            image::ExtendedColorType::Rgb8,
+        )
+        .expect("fixture encodes");
+    bytes
+}
+
+const POST_TEMPLATE: &str = concat!(
+    "<html><body>",
+    "{% if responsive_image %}",
+    "{% if responsive_image.has_picture %}<picture>",
+    "{% for source in responsive_image.sources %}",
+    "<source type=\"{{ source.mime }}\" srcset=\"{{ source.srcset }}\" />",
+    "{% endfor %}",
+    "<img src=\"{{ responsive_image.src }}\" srcset=\"{{ responsive_image.srcset }}\"",
+    " sizes=\"{{ responsive_image.sizes }}\" width=\"{{ responsive_image.width }}\"",
+    " height=\"{{ responsive_image.height }}\" alt=\"{{ responsive_image.alt }}\" />",
+    "</picture>",
+    "{% else %}",
+    "<img src=\"{{ responsive_image.src }}\" srcset=\"{{ responsive_image.srcset }}\"",
+    " sizes=\"{{ responsive_image.sizes }}\" width=\"{{ responsive_image.width }}\"",
+    " height=\"{{ responsive_image.height }}\" alt=\"{{ responsive_image.alt }}\" />",
+    "{% endif %}",
+    "{% elif image %}<img src=\"{{ image }}\" />{% endif %}",
+    "{{ content | safe }}</body></html>",
+);
+
+fn site_with_hero(dir: &Path, config_extra: &str, body: &str) {
+    write_site(
+        dir,
+        &[
+            (
+                "signal.toml",
+                &format!(
+                    "[site]\ntitle = \"Responsive\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n{config_extra}"
+                ),
+            ),
+            (
+                "content/posts/example.md",
+                &format!("---\ntitle: Example\nimage: images/hero.png\nimage_alt: Hero alt\n---\n\n{body}\n"),
+            ),
+            ("templates/post.html", POST_TEMPLATE),
+            (
+                "templates/section.html",
+                "<html><body>section {{ content | safe }}</body></html>",
+            ),
+        ],
+    );
+    write_bytes(dir, "static/images/hero.png", &gradient_png(160, 90));
+}
+
+fn out_dir(dir: &Path) -> PathBuf {
+    dir.join("out")
+}
+
+const IMAGES_CONFIG: &str = "[images]\nwidths = [80, 320]\nformat = \"webp\"\n";
+
+const IMAGES_BOTH: &str = "[images]\nwidths = [80, 320]\nformats = [\"avif\", \"webp\"]\n";
+
+#[test]
+fn body_images_render_responsive_markup_with_actual_dimensions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_CONFIG,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    // The 320w request clamps to the 160px source: srcset advertises
+    // actual widths (80w, 160w), never the requested label.
+    assert!(
+        html.contains("<img src=\"/images/hero-320.webp\" srcset=\"/images/hero-80.webp 80w, /images/hero-320.webp 160w\" sizes=\"100vw\" width=\"160\" height=\"90\" alt=\"Peak\" />"),
+        "got:\n{html}"
+    );
+}
+
+#[test]
+fn hero_context_renders_responsive_hero() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(dir.path(), IMAGES_CONFIG, "Body text.");
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    // Template interpolation escapes `/` exactly like the existing
+    // `image` key (see the frozen goldens); entities decode in attribute
+    // values, so the markup stays correct.
+    assert!(
+        html.contains("<img src=\"&#x2f;images&#x2f;hero-320.webp\" srcset=\"&#x2f;images&#x2f;hero-80.webp 80w, &#x2f;images&#x2f;hero-320.webp 160w\" sizes=\"100vw\" width=\"160\" height=\"90\" alt=\"Hero alt\" />"),
+        "got:\n{html}"
+    );
+}
+
+#[test]
+fn clamped_duplicates_dedupe_to_one_candidate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // Both widths exceed the 160px source: one 160w candidate survives,
+    // keeping the tighter (smaller requested) label.
+    site_with_hero(
+        dir.path(),
+        "[images]\nwidths = [320, 640]\nformat = \"webp\"\n",
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    assert!(
+        html.contains("srcset=\"/images/hero-320.webp 160w\""),
+        "got:\n{html}"
+    );
+    assert!(
+        !html.contains("1920w") && !html.contains(" 320w, "),
+        "got:\n{html}"
+    );
+}
+
+#[test]
+fn unconfigured_sites_render_byte_identical_a1_markup() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(dir.path(), "", "Body ![Peak](/images/hero.png) text.");
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    // Comrak output untouched, hero falls back to the plain image key
+    // (template-escaped, like every A1 `image` rendering).
+    assert!(
+        html.contains("<img src=\"/images/hero.png\" alt=\"Peak\" />"),
+        "got:\n{html}"
+    );
+    assert!(
+        html.contains("<img src=\"&#x2f;images&#x2f;hero.png\" />"),
+        "got:\n{html}"
+    );
+    assert!(!html.contains("srcset"), "got:\n{html}");
+}
+
+#[test]
+fn responsive_pages_track_source_and_config_changes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_CONFIG,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("first builds");
+    let text = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    assert!(text.contains("rebuild:   0\n"), "got:\n{text}");
+
+    // New source dimensions flow into the markup: 120 × 60 hero, 80w
+    // request still exact, 320w clamp now 120 × 68… (120 × 60 → 80 × 40).
+    write_bytes(dir.path(), "static/images/hero.png", &gradient_png(120, 60));
+    build_site_from_disk(dir.path(), &out).expect("rebuilds");
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    assert!(
+        html.contains("srcset=\"/images/hero-80.webp 80w, /images/hero-320.webp 120w\""),
+        "got:\n{html}"
+    );
+    assert!(html.contains("width=\"120\" height=\"60\""), "got:\n{html}");
+}
+
+#[test]
+fn section_bodies_render_responsively_and_track_inputs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_site(
+        dir.path(),
+        &[
+            (
+                "signal.toml",
+                "[site]\ntitle = \"Responsive\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n[images]\nwidths = [80]\nformat = \"webp\"\n",
+            ),
+            (
+                "content/posts/_index.md",
+                "---\ntitle: Posts\n---\n\nSection ![Root](/images/hero.png) body.\n",
+            ),
+            (
+                "content/posts/a.md",
+                "---\ntitle: A\n---\n\nEntry body.\n",
+            ),
+            ("templates/post.html", "<html><body>{{ content | safe }}</body></html>"),
+            (
+                "templates/section.html",
+                "<html><body>section {{ content | safe }}</body></html>",
+            ),
+        ],
+    );
+    write_bytes(dir.path(), "static/images/hero.png", &gradient_png(160, 90));
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let html = std::fs::read_to_string(out.join("posts/index.html")).expect("section");
+    assert!(
+        html.contains("srcset=\"/images/hero-80.webp 80w\""),
+        "got:\n{html}"
+    );
+
+    // The section reuses until its root's source changes…
+    let text = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    assert!(text.contains("rebuild:   0\n"), "got:\n{text}");
+    write_bytes(dir.path(), "static/images/hero.png", &gradient_png(120, 60));
+    let text = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    assert!(
+        text.contains("  posts/index.html\n    reason: "),
+        "section must rebuild with its root source: got:\n{text}"
+    );
+}
+
+#[test]
+fn listings_without_responsive_markup_keep_query_only_coverage() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_CONFIG,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    let summary = build_site_from_disk(dir.path(), &out).expect("builds");
+    // The home page is not planned here (no home_collection), but the
+    // section listing renders summaries only: no srcset anywhere.
+    let html = std::fs::read_to_string(out.join("posts/index.html")).expect("section");
+    assert!(!html.contains("srcset"), "got:\n{html}");
+    assert!(
+        summary
+            .specs
+            .iter()
+            .all(|s| s.kind != signal_core::ArtifactKind::Home),
+        "no home artifact in this fixture"
+    );
+}
+
+#[test]
+fn responsive_output_is_deterministic_across_builds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_CONFIG,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let first = tempfile::tempdir().expect("tempdir");
+    let second = tempfile::tempdir().expect("tempdir");
+    build_site_from_disk(dir.path(), first.path()).expect("first builds");
+    build_site_from_disk(dir.path(), second.path()).expect("second builds");
+    let a = std::fs::read(first.path().join("posts/example/index.html")).expect("a");
+    let b = std::fs::read(second.path().join("posts/example/index.html")).expect("b");
+    assert_eq!(a, b);
+}
+
+#[test]
+fn explain_derivative_shows_responsive_representation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_CONFIG,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let text = signal_cli::explain::explain_derivative_from_disk(
+        dir.path(),
+        &out,
+        "images/hero.png",
+        80,
+        None,
+    )
+    .expect("explains");
+    assert!(
+        text.contains("Responsive:\n  fallback: /images/hero-320.webp\n  sizes: 100vw\n  webp:\n    /images/hero-80.webp 80w\n    /images/hero-320.webp 160w\n"),
+        "got:\n{text}"
+    );
+}
+
+#[test]
+fn multi_format_body_images_render_picture_avif_first() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_BOTH,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    let summary = build_site_from_disk(dir.path(), &out).expect("builds");
+    // Two formats × two widths: four derivatives plus the source.
+    assert_eq!(summary.derived_images, 4);
+    for output in [
+        "images/hero-80.avif",
+        "images/hero-320.avif",
+        "images/hero-80.webp",
+        "images/hero-320.webp",
+    ] {
+        assert!(out.join(output).exists(), "missing {output}");
+    }
+    // AVIF bytes are a real AVIF container, distinct from the WebP bytes.
+    let avif = std::fs::read(out.join("images/hero-80.avif")).expect("avif");
+    assert_eq!(&avif[4..12], b"ftypavif");
+    let webp = std::fs::read(out.join("images/hero-80.webp")).expect("webp");
+    assert_ne!(avif, webp);
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    assert!(
+        html.contains("<picture><source type=\"image/avif\" srcset=\"/images/hero-80.avif 80w, /images/hero-320.avif 160w\" /><source type=\"image/webp\" srcset=\"/images/hero-80.webp 80w, /images/hero-320.webp 160w\" /><img src=\"/images/hero-320.webp\" srcset=\"/images/hero-80.webp 80w, /images/hero-320.webp 160w\" sizes=\"100vw\" width=\"160\" height=\"90\" alt=\"Peak\" /></picture>"),
+        "got:\n{html}"
+    );
+}
+
+#[test]
+fn multi_format_hero_renders_picture_from_template_sources() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(dir.path(), IMAGES_BOTH, "Body text.");
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    // Template-escaped slashes decode identically in attribute values;
+    // AVIF source precedes WebP, WebP fallback closes the picture.
+    assert!(html.contains("<picture>"), "got:\n{html}");
+    // Template interpolation escapes `/` (like every A1 `image`
+    // rendering); entities decode in attribute values.
+    let avif_pos = html.find("image&#x2f;avif").expect("avif source");
+    let webp_pos = html.find("image&#x2f;webp").expect("webp source");
+    assert!(avif_pos < webp_pos, "AVIF source first: got:\n{html}");
+    assert!(
+        html.contains("hero-320.avif 160w") && html.contains("hero-320.webp 160w"),
+        "both groups present: got:\n{html}"
+    );
+}
+
+#[test]
+fn avif_only_config_renders_plain_responsive_img() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        "[images]\nwidths = [80]\nformat = \"avif\"\n",
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    let summary = build_site_from_disk(dir.path(), &out).expect("builds");
+    assert_eq!(summary.derived_images, 1);
+    assert!(out.join("images/hero-80.avif").exists());
+    assert!(!out.join("images/hero-80.webp").exists());
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    assert!(
+        !html.contains("<picture>"),
+        "single format, no picture: got:\n{html}"
+    );
+    assert!(
+        html.contains("<img src=\"/images/hero-80.avif\" srcset=\"/images/hero-80.avif 80w\" sizes=\"100vw\" width=\"80\" height=\"45\" alt=\"Peak\" />"),
+        "got:\n{html}"
+    );
+}
+
+#[test]
+fn webp_only_config_is_unchanged_by_a4() {
+    // A site that never opts into AVIF renders exactly the A3 markup:
+    // plain responsive `<img>`, no `<picture>`, no `.avif` outputs.
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_CONFIG,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    assert!(!html.contains("<picture>"), "got:\n{html}");
+    assert!(!html.contains(".avif"), "got:\n{html}");
+    assert!(
+        html.contains("<img src=\"/images/hero-320.webp\" srcset=\"/images/hero-80.webp 80w, /images/hero-320.webp 160w\" sizes=\"100vw\" width=\"160\" height=\"90\" alt=\"Peak\" />"),
+        "got:\n{html}"
+    );
+}
+
+#[test]
+fn removing_a_format_prunes_its_derivatives_and_reuses_the_rest() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_BOTH,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("first builds");
+    // Drop AVIF: its artifacts prune, WebP reuses, the page rebuilds
+    // (picture → img) exactly once.
+    site_with_hero(
+        dir.path(),
+        IMAGES_CONFIG,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let summary = build_site_from_disk(dir.path(), &out).expect("rebuilds");
+    assert!(!out.join("images/hero-80.avif").exists());
+    assert!(!out.join("images/hero-320.avif").exists());
+    assert!(out.join("images/hero-80.webp").exists());
+    assert!(
+        summary
+            .pruned_paths
+            .contains(&"images/hero-80.avif".to_string()),
+        "got: {:?}",
+        summary.pruned_paths
+    );
+    assert!(
+        summary
+            .pruned_paths
+            .contains(&"images/hero-320.avif".to_string()),
+        "got: {:?}",
+        summary.pruned_paths
+    );
+    let text = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    let reuse = text.split("Reuse:\n").nth(1).expect("reuse section");
+    assert!(reuse.contains("  images/hero-80.webp\n"), "got:\n{text}");
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    assert!(
+        !html.contains("<picture>"),
+        "back to plain img: got:\n{html}"
+    );
+}
+
+#[test]
+fn source_change_rebuilds_both_formats_and_consumers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_BOTH,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("first builds");
+    write_bytes(dir.path(), "static/images/hero.png", &gradient_png(120, 60));
+    let text = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    for rebuilt in [
+        "  images/hero-80.avif\n",
+        "  images/hero-320.avif\n",
+        "  images/hero-80.webp\n",
+        "  images/hero-320.webp\n",
+        "  posts/example/index.html\n",
+    ] {
+        let rebuild = text.split("Rebuild:\n").nth(1).expect("rebuild section");
+        assert!(
+            rebuild.contains(rebuilt),
+            "missing {rebuilt:?}: got:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn multi_format_output_is_deterministic_across_builds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_BOTH,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let first = tempfile::tempdir().expect("tempdir");
+    let second = tempfile::tempdir().expect("tempdir");
+    build_site_from_disk(dir.path(), first.path()).expect("first builds");
+    build_site_from_disk(dir.path(), second.path()).expect("second builds");
+    for rel in [
+        "posts/example/index.html",
+        "images/hero-80.avif",
+        "images/hero-320.avif",
+        "images/hero-80.webp",
+        "images/hero-320.webp",
+        ".signal/manifest.json",
+    ] {
+        let a = std::fs::read(first.path().join(rel)).expect(rel);
+        let b = std::fs::read(second.path().join(rel)).expect(rel);
+        assert_eq!(a, b, "{rel} differs across builds");
+    }
+}
+
+#[test]
+fn explain_multi_format_derivative_shows_both_groups() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    site_with_hero(
+        dir.path(),
+        IMAGES_BOTH,
+        "Body ![Peak](/images/hero.png) text.",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let text = signal_cli::explain::explain_derivative_from_disk(
+        dir.path(),
+        &out,
+        "images/hero.png",
+        80,
+        Some("avif"),
+    )
+    .expect("explains");
+    assert!(text.contains("format: avif"), "got:\n{text}");
+    assert!(
+        text.contains("Responsive:\n  fallback: /images/hero-320.webp\n  sizes: 100vw\n  avif:\n    /images/hero-80.avif 80w\n    /images/hero-320.avif 160w\n  webp:\n    /images/hero-80.webp 80w\n    /images/hero-320.webp 160w\n"),
+        "got:\n{text}"
+    );
+}

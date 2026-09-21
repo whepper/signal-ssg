@@ -30,6 +30,28 @@ stages but never skip an upstream one:
 | `serve`         | yes    | yes                   | yes                  | yes  | yes     | yes   | yes      |
 | `check`         | yes    | yes                   | yes                  | no   | no      | no    | no       |
 | `build --explain` | yes  | yes                   | yes                  | yes  | no      | no    | no       |
+| `explain`       | yes    | yes                   | yes                  | yes  | no      | no    | no       |
+
+`explain` without a target prints the whole plan exactly like
+`build --explain`; `explain <asset>` prints one source asset's record
+(source, type, byte size, referrers, planned derivatives, output, copy
+action, reuse/rebuild decision) from the same plan (ADR 0028), and
+`explain <asset> --width W [--format webp]` (or a bare derivative output
+path) prints one derivative's record (source, input/output dimensions,
+output, dependencies, generate action, decision) from the same plan
+(ADR 0029). `explain social/<path>.png` prints one generated social
+card's record (page, dimensions, inputs, output, generate action,
+reuse/rebuild decision, or its non-planned state) from the same plan
+(ADR 0032). `explain <output-path>` (A7.1) prints any planned artifact's
+record by output path — kind, declared inputs, and reuse/rebuild decision,
+plus the document count for the search index — so `explain index.json`
+describes the search artifact; the same lookup also covers the sitemap,
+feeds, `robots.txt`, `404.html`, and rendered pages (ADR 0034). `check`
+additionally reports pure asset counts (discovered /
+referenced / resolved / missing / unsafe, plus planned derivatives and
+social images) derived from specs plus model, and advisory diagnostics
+(A6, ADR 0033) over the same model — both read-only, with no filesystem
+reads beyond validation and image-header measurement for diagnostics.
 
 The invariant: a command must not call a site valid while skipping
 validation a real build requires. `check` and `--explain` are read-only
@@ -118,12 +140,23 @@ schema-versioned, deterministic record of
 generation identity (engine_version + behavior_version)
 entry / query / config / static-source digests
 every loaded template by name
+source-asset digests by static path (A1: `assets` map, ADR 0028)
 one flat record per artifact: kind, route, InputRef inputs, output byte digest
 ```
 
 Artifact records have no edges to traverse. A template-rendered artifact names
 the complete loaded template set (`InputRef::TemplateSet`), and one build-wide
-compatibility field gates reuse. Recording, reuse, and pruning are described
+compatibility field gates reuse. A page (or section page rendering a
+section-root body) additionally names the source assets its entry references
+as `InputRef::Static` (A1 asset edges, ADR 0028); the reuse predicate compares
+those against the manifest's source-asset digests, so editing an asset
+rebuilds exactly its embedders. Generated image derivatives (A2, ADR 0029)
+extend the same shape one level down: each `DerivedImage` artifact and each
+embedding page names `InputRef::DerivedImage{source,width,format}` —
+parameters ride the reference (parameter changes are `InputsChanged`),
+byte comparison reuses the source-asset map (source changes are
+`DerivativeChanged`), and no derivative is ever compared against page
+HTML. Recording, reuse, and pruning are described
 in `docs/adr/0015`, `0016`, `0017`, `0019`, and `0020`; there is no graph of
 any kind.
 
@@ -165,7 +198,11 @@ collection root. Drafts are skipped at
 ingest. Generators stay pure; resolution and writing happen in `signal-cli`
 one artifact at a time — static assets included, as planned `Static`
 specs — and every output path is validated/contained within the output
-directory. Front-matter ID as a move-surviving escape hatch is reserved,
+directory. Source assets (files under `static/`) are the asset input
+boundary; references from content (Markdown body images, front-matter
+heroes) resolve to source paths through the shared pure rules in
+`signal-core::asset`, and embedding pages name them as `Static` build
+inputs (ADR 0028). Front-matter ID as a move-surviving escape hatch is reserved,
 not implemented. Git-derived `last_modified` is opt-in
 (`[git] last_modified`), resolved by `signal-cli` (the process/filesystem
 boundary) at ingest, advisory on failure, and always outranked by explicit
@@ -202,6 +239,25 @@ soundly. No field-level access tracking is performed; the set is deliberately
 conservative. Rendering contexts are explicit
 `RenderContext` value bags carrying ready-to-render values: formatted dates,
 canonical URLs, OpenGraph fields, and serialized JSON-LD alongside content.
+Body HTML for entry and section-root pages passes through responsive
+rewriting first (A3, ADR 0030; `<picture>` since A4, ADR 0031): Comrak
+`<img>` tags whose sources have planned derivatives gain `srcset` (actual
+widths, deduplicated), `sizes="100vw"`, and intrinsic dimensions for a
+single planned format, or become `<picture>` with one AVIF-first
+`<source type=…>` per planned format and a WebP fallback `<img>` for
+several, while every other tag passes through byte-identical; entry
+heroes additionally gain a `responsive_image` context value (flat
+fallback fields plus per-format `sources` and a `has_picture` flag) for
+templates that opt in. On `[social]`-enabled sites, participating entry
+pages additionally gain a generated Open Graph/Twitter card reference
+(A5, ADR 0032): `og_image`/`twitter_image` point at the page's
+`social/<route-path>.png` card (superseding the hero), `twitter_card`
+and `twitter_*` keys are supplied, and `social_image` carries
+`{ url, absolute_url, width, height }` for templates. The card itself is
+an `ArtifactKind::SocialImage` artifact planned from page identity,
+configuration, and the optional hero source — never from the page's HTML.
+The planner decides which representations exist (their inputs are already
+declared); rendering only expresses them.
 Every route-shaped string entering a template or serializer is the URL-path
 form (`signal_core::encode_route_path`, ADR 0023): logical routes may
 contain URL-significant characters, so `?`, `#`, `%`, and non-ASCII bytes
@@ -230,6 +286,47 @@ themed not-found page (`404.html`) is planned directly from
 families (e.g. author feeds) remains a future projection behind the
 `Generator` trait.
 
+Entry pages additionally carry a **related-entry projection**
+(`signal_generators::related_entries`): the strongest shared-tag overlaps
+over the canonical tag index, capped by `[related] limit`, ranked by
+shared-tag count then the standard newest-first order. It is a context
+projection, not an artifact — no spec, no file. Each page declares
+`InputRef::Query{related:<route>}`, so a change to any entry it lists
+rebuilds the page without any reverse edge (ADR 0035).
+
+### Search index (A7, ADR 0034)
+
+`Search` is the one projection written for an external consumer rather
+than a rendered page. ADR 0034 fixes its architecture:
+
+- **Document collection, not an engine.** `index.json` is a versioned,
+  pretty-printed JSON array of normalized documents. Signal owns
+  extraction, structural normalization, projection, and serialization;
+  tokenization, matching, ranking, filtering, and presentation belong to
+  the browser client. Signal ships no tokenizer, no postings, and no
+  scores.
+- **One site-wide artifact.** `ArtifactKind::SearchIndex` at `index.json`,
+  planned unconditionally (like the sitemap), carrying no route.
+- **Narrowest possible input.** The only declared input is
+  `InputRef::Query{search_documents}` — the exact projection consumed. No
+  `Config`, no `TemplateSet`, no per-entry edges, and no HTML digests. The
+  index therefore rebuilds exactly when the searchable projection changes
+  (title, body prose, description, tag, date, route) and is reused for
+  template, config, asset, fenced-code, draft, and section-root changes.
+- **Structural normalization only.** `RenderedBody.plain_text` strips
+  Markdown and collapses whitespace while preserving authored case and
+  Unicode, so snippets stay display-faithful. Lexical folding (case,
+  accents, stemming) is the client's.
+- **Exclusions reuse the publication model.** Regular entries only:
+  drafts never reach the model, section roots are filtered, and generated
+  pages (listings, taxonomy, feeds, sitemap, 404) are not entries.
+
+`signal explain index.json` reports the artifact's kind, declared input,
+document count, and reuse/rebuild decision, derived from the same spec
+list and `artifact_inputs` the build plans from (A7.1). The contract, its
+structural normalization, its exact input set, and the rebuild matrix are
+pinned by `crates/signal-cli/tests/search.rs` (A7.2).
+
 ## 9. ArtifactSpec
 
 Generators plan; the CLI resolves and writes — one artifact at a time:
@@ -237,7 +334,7 @@ Generators plan; the CLI resolves and writes — one artifact at a time:
 ```rust
 struct ArtifactSpec {
     path: String,       // relative to output root
-    kind: ArtifactKind, // Page | CollectionIndex | Home | Taxonomy | Rss | Sitemap | SearchIndex | Static | Robots | NotFound
+    kind: ArtifactKind, // Page | CollectionIndex | Home | Taxonomy | Rss | Sitemap | SearchIndex | Static | DerivedImage | SocialImage | Robots | NotFound
     route: Option<Route>,
 }
 ```
@@ -249,9 +346,13 @@ the build manifest, not on the spec. Future content representations
 Three invariants (ADR 0014):
 
 - **Plan completeness.** Every output file — HTML, feeds, sitemap, search
-  index, and static assets — corresponds to exactly one `ArtifactSpec`.
+  index, static assets, and generated image derivatives and social images —
+  corresponds to exactly one `ArtifactSpec`.
   Static files are enumerated during planning (deterministically,
-  symlinks skipped) and resolved through the same pipeline; generated vs
+  symlinks skipped) and resolved through the same pipeline; derivatives
+  are planned purely from content references plus `[images]`
+  configuration (A2, ADR 0029), and social images purely from page
+  participation plus `[social]` configuration (A5, ADR 0032); generated vs
   static path collisions fail validation before anything is written. Two
   distinct planned paths that resolve to the same filesystem object on the
   output volume (case-insensitive or Unicode-normalizing alias) are likewise
@@ -342,8 +443,10 @@ all of the following hold (any uncertainty rebuilds):
 - the manifest record exists under the same path with the same artifact kind;
 - the canonical input reference lists are equal;
 - every current input digest matches the recorded one (entries; queries via
-  their consumed projections; config; and the complete loaded template set via
-  `InputRef::TemplateSet`);
+  their consumed projections; config; the complete loaded template set via
+  `InputRef::TemplateSet`; and source bytes via the `assets` map, for
+  `Static` inputs and for generated inputs that consume a source —
+  `DerivedImage{source}`, a social image's hero);
 - the existing output is a regular file whose bytes hash to the recorded
   output digest.
 
@@ -406,14 +509,140 @@ against the in-memory inventory of planned routes, files, static assets,
 and entry heading ids. It runs after `validated_plan()` and before any
 write/prune/manifest step, so a broken reference fails closed like invalid
 content; `signal check` runs the same validation without building.
+Image derivative sources (A2, ADR 0029) are probed in the same position —
+existence plus PNG/JPEG decodability, on both the build and check paths —
+so malformed sources fail identically everywhere before any write.
+Composited social-card hero sources (A5, ADR 0032) are probed there too,
+by the same read-then-decode rule.
 External destinations are classified and skipped (never fetched).
 Reference-style/autolink Markdown forms, template-literal URLs, and raw
 HTML are outside the structured model and intentionally unchecked.
 
-## 16. Explicitly deferred
+## 16. Asset and publishing pipeline (A1–A6)
 
-Plugins (WASM/native/dynamic), remote content/caching, image processing, i18n,
-a search engine or UI (only the static index exists), CMS integration, dynamic
+A1–A5 built three generated artifact families around the original source
+asset. They share one pipeline and one rule per family: **identity decides
+reuse, and the planner decides what exists.**
+
+```text
+                       content (Markdown bodies, front matter)
+                                     │
+                                     ▼
+                          asset references (pure strings)
+                                     │
+         ┌───────────────────────────┼───────────────────────────┐
+         ▼                           ▼                           ▼
+   Static artifact          DerivedImage artifact         SocialImage artifact
+   source bytes             source + width + format      page metadata + hero
+         │                           │                           │
+         └───────────────────────────┼───────────────────────────┘
+                                     ▼
+                            ArtifactSpec (path + kind)
+                                     │
+                     ┌───────────────┴────────────────┐
+                     ▼                                ▼
+              artifact_inputs                   resolve_artifact
+              (pure: config + model)            (bytes at the I/O boundary)
+                     │                                │
+                     ▼                                ▼
+             BuildPlan / manifest              HTML, images, feeds, …
+                     │
+                     └──────────────► check / explain / build agree
+```
+
+| Family | Kind | Output identity | Declared inputs | Producer |
+|---|---|---|---|---|
+| source asset | `Static` | source path, verbatim | `Static{path}` | copy (`build::resolve_static_artifact`) |
+| image derivative | `DerivedImage` | `(source, width, format)` → `{stem}-{width}.{ext}` | `DerivedImage{source,width,format}` | `signal-cli::images` (decode → clamp → resize → encode) |
+| social image | `SocialImage` | route → `social/<route-path>.png` | `Entry{route}`, `Config`, `Static{hero}` when composited | `signal-cli::social` (metadata + bundled font → PNG) |
+
+Boundaries, unchanged from A1's shape:
+
+- **Pure core.** `signal-core::asset` (references, MIME, derivative
+  identity, responsive selection) and `signal-core::social` (naming, the
+  path → page inversion, participation, URLs) do no I/O: planning and
+  `artifact_inputs` stay byte-free, and every identity rule lives in one
+  pure function that planning, rendering, `check`, and `explain` share.
+- **I/O boundary.** `signal-cli::images`, `signal-cli::social`, and
+  `signal-cli::responsive` own pixels and files. Codec details never leave
+  them: the planner sees specs, never `image`/`ravif`/`ab_glyph` types.
+- **No artifact → artifact edges.** Every declared input is an entry, a
+  query projection, the template set, the configuration, or a *source*
+  file's bytes. Derivative and social inputs digest the source through the
+  manifest's `assets` map; nothing digests another artifact's output. The
+  dependency graph is therefore depth ≤ 2 and **cannot contain a cycle**,
+  and reuse needs no traversal.
+- **Rendering decides only how.** Body rewriting and hero contexts consume
+  the plan's derivative views (via the shared `responsive_image` selector);
+  the social generator never renders HTML and the renderer never plans.
+  The one deliberate filesystem read in the rendering path is dimension
+  *measurement* for `srcset`/`width`/`height` (`signal-cli::images`
+  `probe_dimensions`, post-validation, hard error on failure): planning
+  deliberately stays byte-free (ADR 0029), so dimensions are measured
+  facts, not plan inputs.
+- **Manifest.** `generation identity` (engine + behavior version) is a
+  build-wide gate; `config_digest`, `entries`, `queries`, `templates`, and
+  `assets` are the digest tables that declared inputs resolve against.
+  Generated families need no schema of their own.
+
+Behavior versions record output-generating changes that semantic inputs
+cannot express (rendering, encoders, layout). The inventory and the bump
+rule live in [Incremental builds](website/content/docs/builds.md); the
+authoritative history is the doc comment on
+`signal_cli::manifest::GENERATION_BEHAVIOR_VERSION`.
+
+### Diagnostics (A6)
+
+A6 adds no artifact, no input variant, no manifest field, and no new
+dependency edge. It adds one **pure analysis over the publishing model**:
+`signal-cli::diagnostics::analyze` reads the planned specs, the frozen
+model, the configuration, and image headers, and returns a small closed
+set of advisory `Diagnostic` values.
+
+```text
+        planned specs + frozen model + config + source headers
+                              │
+                              ▼
+                         analyze()
+                              │
+                 ┌────────────┴────────────┐
+                 ▼                         ▼
+          check presentation        explain presentation
+```
+
+Rules that keep diagnostics from becoming a second publishing system:
+
+- **Not artifacts.** Diagnostics are never planned, never written, never
+  pruned, and never recorded in the manifest. They do not appear in
+  `ArtifactKind`, `InputRef`, or the artifact graph, and computing them
+  cannot change a single output byte or reuse decision.
+- **Advisory only.** Hard failures remain `BuildError` and are unchanged:
+  a missing or unsafe reference, a malformed image, an output collision,
+  or an invalid configuration fails before diagnostics run. Severity is
+  therefore two-valued — `warning` and `info` — with no `error` level.
+- **One analysis, two presentations.** `check` and `explain` both call
+  `analyze`; neither re-derives a condition. `explain` filters the same
+  result by subject, so the two can never disagree.
+- **Evidence, not advice.** Each diagnostic states a measured fact
+  ("source is 4000×3000; the largest generated representation is 1280px
+  wide") and carries a stable `code`. Conditions Signal cannot establish
+  are not reported: byte-level "derivative larger than its source" needs
+  generated output, which `check` does not have, so it is deliberately
+  absent (see `docs/adr/0033`).
+- **Deterministic.** Diagnostics sort by `(severity, subject, code)`;
+  every input is a `BTreeMap`/`BTreeSet` or a sorted walk.
+
+## 17. Explicitly deferred
+
+Plugins (WASM/native/dynamic), remote content/caching, further image
+codecs beyond AVIF/WebP, per-format encoder settings, cropping and other
+transformations, alternate social-card dimensions or themes, recursive
+processing of generated social images, remote image services, i18n,
+a search engine or UI (the static index is a document collection;
+tokenization, ranking, and presentation stay the client's — ADR 0034),
+textual/embedding similarity, a generated related-content payload, and
+editorial related-content references (relatedness is page-local derived
+data over the canonical tag index — ADR 0035), CMS integration, dynamic
 runtime behavior, redirects/aliases, sophisticated pagination, a custom
 template language, a custom Markdown parser, a graph traversal engine,
 per-artifact template-closure precision and field-level template tracking, and

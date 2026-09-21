@@ -85,6 +85,22 @@ the advisory kinds. Unknown designators stay ordinary blockquotes.
 
 Relative destinations and `http(s)` are allowed. Executable or unsupported schemes such as `javascript:`, `data:`, and `vbscript:` are rejected.
 
+Local image destinations (Markdown body images and the front-matter hero
+`image`) are asset references: they must resolve to a file under
+`static/`, which Signal copies into the output and tracks as a build
+dependency of the embedding page. Missing or escaping references fail the
+build; external URLs are passed through and never fetched. When
+`[images]` requests derivatives, body images for raster sources
+additionally render responsive markup (single format: `srcset` of actual
+widths, `sizes="100vw"`, intrinsic dimensions; several formats:
+`<picture>` with AVIF-first `<source>` elements and a WebP fallback)
+and heroes gain a `responsive_image` template value; without derivatives
+the markup stays exactly as authored. When `[social]` is configured,
+pages gain a generated social image (a sharing card), referenced from `og:image` and
+`twitter:image`; a page opts out with `social_image: false` in front
+matter. See
+[Concepts](concepts.md) and `docs/adr/0028-first-class-assets.md`.
+
 ## Ordering
 
 Generated listings use deterministic newest-first ordering for dated entries, followed by stable ordering for undated entries.

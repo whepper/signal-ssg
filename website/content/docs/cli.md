@@ -3,7 +3,7 @@ title: CLI reference
 description: Every Signal command, flag, exit code, and output.
 ---
 
-Signal has four commands. `serve` reuses the production build pipeline; `check` and `build --explain` are read-only views over the same validation every build requires.
+Signal has four commands. `serve` reuses the production build pipeline; `check`, `explain`, and `build --explain` are read-only views over the same validation every build requires.
 
 ## signal build
 
@@ -88,9 +88,77 @@ signal check --root my-site
 site: My Site
 collection: posts
 references: 6 checked (1 external skipped)
+assets: 8 discovered (3 referenced, 3 resolved, 0 missing, 0 unsafe; 6 derivatives, 0 social images)
+diagnostics: 1 warning, 2 info
+  warning: source is 4000×3000; the largest generated representation is 1280px wide
+    images/hero.png
+  info: no content entry references this asset
+    images/old-photo.jpg
 ```
 
 Exit code is nonzero when the site is invalid. The one documented exception: the output-filesystem alias probe needs an output directory, so it runs in `build`/`--explain` only. Everything else a build rejects, `check` rejects identically. See [Reference validation](../validation/).
+
+`diagnostics` are advisory: evidence-based observations over the publishing model (unreferenced raster assets, oversized sources, widths that clamp to the same output, missing or empty image alt text). They never fail a build, and for a clean site the summary stays one line with no detail. See [Reference validation](../validation/#diagnostics-advisory).
+
+## signal explain
+
+Explain the build plan, one asset, one image derivative, one generated social image, or any other planned artifact, without building:
+
+```sh
+signal explain --root my-site --out dist
+signal explain --root my-site --out dist images/hero.jpg
+signal explain --root my-site --out dist images/hero.jpg --width 640 --format webp
+signal explain --root my-site --out dist social/posts/example.png
+signal explain --root my-site --out dist index.json
+```
+
+| Argument/flag | Default | Meaning |
+|---|---|---|
+| `--root` | `.` | Site root containing `signal.toml` |
+| `--out` | `dist` | Output directory (for manifest-aware reuse/rebuild decisions) |
+| `target` | — | Source asset, derivative output, social image, or any planned output path (`index.json`, `sitemap.xml`, …). Omit for the whole plan |
+| `--width` | — | Explain the derivative at this width (requires `target`) |
+| `--format` | `webp` | Derivative format (requires `--width`) |
+
+With no target it prints the same plan as `signal build --explain`. With a target it prints that artifact's measured facts and reuse/rebuild decision, plus any diagnostics about it (assets and derivatives):
+
+```text
+Asset
+=====
+  path: images/hero.png
+  ...
+Decision:
+  reuse
+
+Diagnostics:
+  warning: source is 4000×3000; the largest generated representation is 1280px wide
+```
+
+A clean asset has no `Diagnostics:` section.
+
+Any planned artifact that is not an asset, derivative, or social image explains by its output path. The search index is the motivating case: `signal explain index.json` describes the planned artifact — its kind, its declared query input, and its document count — and whether it would be reused or rebuilt:
+
+```text
+Artifact
+========
+  path: index.json
+
+Kind:
+  SearchIndex
+
+Inputs:
+  Query(search_documents)
+
+Documents:
+  13
+
+Decision:
+  reuse
+```
+
+A rebuild names the reason from the same reason model `build --explain` uses (`Decision: rebuild: query changed: search_documents`). `explain index.json` describes the *planned artifact* only; it does not run browser search, tokenize, or rank — that remains the client's concern (see [Reference validation](../validation/) and ADR 0034). The same output-path lookup also explains `sitemap.xml`, `index.xml`, `robots.txt`, `404.html`, and rendered pages.
+
+`explain` is read-only: it resolves nothing, writes nothing, prunes nothing, and never touches the manifest — the same guarantee as `build --explain`.
 
 ## signal serve
 

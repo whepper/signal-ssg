@@ -82,6 +82,68 @@ crawler, plus a `Sitemap:` reference whenever `site.base_url` is configured
 and the sitemap therefore exists. Per-agent or disallow rules are not
 implemented; a real requirement would extend this table.
 
+## Images
+
+```toml
+[images]
+widths = [640, 1280, 1920]
+formats = ["avif", "webp"]
+```
+
+Opt-in. When `widths` is non-empty, every content-referenced raster
+source (PNG/JPEG under `static/`) gains one `{stem}-{width}.{ext}`
+derivative per width per format: deterministically resized
+(aspect-preserving Lanczos3, never upscaled — requests at or above the
+source width emit source dimensions) and encoded (lossless WebP; AVIF at
+fixed quality 70 / speed 10 via ravif — see `docs/adr/0031-avif-and-picture.md`).
+The legacy singular `format = "webp"` remains valid for one format;
+`formats`, when non-empty, wins over `format`, and setting both is an
+error. Unknown formats fail; duplicates are deduplicated; author order
+never affects output. Embedding pages depend on these derivatives, so
+editing a source rebuilds exactly its derivatives and embedders;
+removing a format prunes exactly its artifacts while the surviving
+format reuses. Unchanged derivatives reuse byte-identically across
+builds. SVG, GIF, and other assets are never rasterized and stay
+verbatim static outputs. Absent (or empty `widths`) plans nothing and
+leaves output byte-identical. Rendered pages embed the derivatives as
+responsive markup: one planned format renders a responsive `<img>`
+(`srcset` of actual widths, `sizes="100vw"`, intrinsic dimensions);
+several render `<picture>` with one `<source type=…>` per format
+(AVIF first) and a WebP fallback `<img>`. Heroes are exposed to
+templates as `responsive_image`; `signal explain <asset> --width W
+[--format F]` describes each derivative's format-grouped responsive
+representation.
+
+## Social images
+
+```toml
+[social]
+width = 1200
+height = 630
+```
+
+Opt-in. When `[social]` is present, every entry page generates one
+deterministic PNG social image (a 1200 × 630 sharing card by default) at
+`social/<route-path>.png` (e.g. `/posts/example/` →
+`social/posts/example.png`), composed from the site title, the page title,
+the optional description, the optional author, and the optional PNG/JPEG
+hero image (`image`), which is composited with a centred cover crop. The
+font is bundled and compiled in, so social images are identical on every
+machine; text wraps deterministically and over-long titles ellipsize
+rather than disappear. Entry pages then reference the social image from
+`og:image` and `twitter:image` (with `twitter_card = summary_large_image`
+and `social_image` — `url`, `absolute_url`, `width`, `height` — available
+to templates); the hero still supplies `json_ld` and `image_absolute_url`.
+`width`/`height` default to 1200 × 630 and must be 1..=4096. Section roots
+and listing pages never get one, and any page can opt out with front-matter
+`social_image: false` (or opt in with `true`). Because Open Graph images
+must be publicly resolvable, `[social]` requires `site.base_url`;
+`enabled = false` keeps the table but plans nothing. Social images
+participate in incremental builds exactly like every other artifact:
+editing a title, description, hero, or dimension rebuilds the social image
+and its page; disabling the feature prunes them and restores hero-based
+metadata. See `docs/adr/0032-generated-social-images.md`.
+
 ## Output
 
 ```toml
@@ -150,3 +212,5 @@ signal check
 ```
 
 Signal rejects invalid dates, unsafe routes, conflicting output paths, and unsupported URL schemes rather than silently rewriting them.
+
+`signal check` also reports advisory **diagnostics** over the publishing model — unreferenced raster assets, sources far larger than the largest representation Signal generates, configured widths that clamp to the same output, and missing or empty image alt text. Diagnostics are `warning` or `info`, never a build failure, and never change output or reuse. See `docs/adr/0033`.

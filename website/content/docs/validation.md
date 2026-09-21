@@ -26,6 +26,33 @@ broken internal reference in "content/posts/a.md" (route /posts/a/):
 
 Reasons are `target does not exist`, `invalid internal reference` (root escape, or the routeless `404.html`), and `fragment does not exist`.
 
+## Diagnostics (advisory)
+
+Validation answers "is this site correct?" and fails the build when it is not. Diagnostics answer "what looks wasteful or missing?" and never fail anything. `signal check` reports them; `signal explain <asset>` reports the ones about that asset.
+
+```text
+diagnostics: 2 warnings, 3 info
+  warning: hero image /images/hero.png has no image_alt
+    /posts/example/
+  warning: source is 4000×3000; the largest generated representation is 1280px wide
+    images/hero.png
+  info: no content entry references this asset
+    images/old-photo.jpg
+```
+
+Every diagnostic states a measured fact, carries a stable code (`oversized-source`, `redundant-derivative-width`, `unreferenced-asset`, `hero-alt-missing`, `image-alt-empty`), and has one of two severities:
+
+- **warning** — an actionable inefficiency or content gap: a source far larger than anything Signal publishes, or a front-matter hero with no `image_alt`.
+- **info** — an observation that may be entirely intentional: an unreferenced raster asset, configured widths that clamp to the same output, or an empty body-image `alt` (the correct marker for a decorative image).
+
+What Signal deliberately does **not** diagnose:
+
+- **Byte-level efficiency** ("this derivative is larger than its source"). That needs generated output, which `check` does not have; computing it would make `check` encode images or read a possibly-stale output tree, and `check` and `explain` could then disagree.
+- **Template-referenced assets.** The model tracks content references, not `<link>`/`<script>` URLs, so only raster assets are reported as unreferenced — CSS, JS, SVG, and favicons are never flagged.
+- **Heroes whose template does not render them.** Signal cannot know whether a template uses the hero, so it reports the missing `image_alt` rather than guessing.
+
+Diagnostics are not artifacts: nothing is written, pruned, or recorded in the manifest, and computing them cannot change a single output byte or reuse decision. Conditions that are genuinely wrong — a missing or unsafe reference, a malformed image, an output collision, an invalid configuration — remain hard errors that fail the build exactly as before.
+
 ## Deliberate limitations
 
 These are documented boundaries, not oversights:

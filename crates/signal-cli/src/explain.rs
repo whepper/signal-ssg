@@ -101,6 +101,446 @@ pub fn explain_site(
     Ok(render_plan(&planned))
 }
 
+/// Explain one source asset: identity, measured facts, reverse references,
+/// planned derivatives, and the build decision for its `Static` artifact.
+///
+/// Read-only like [`render_plan`]: constructs the same plan execution would
+/// use (through the shared pipeline prefix, including reference
+/// validation), then renders one asset's record without resolving,
+/// writing, pruning, or persisting anything.
+///
+/// `target` accepts `images/a.svg`, `/images/a.svg`, or
+/// `static/images/a.svg`. Unknown targets fail with a model diagnostic.
+/// A derivative *output* path (`images/hero-640.webp`) transparently
+/// explains the derivative instead (same as passing the source with
+/// matching `--width`/`--format`).
+pub fn explain_asset(
+    root: &Path,
+    out_dir: &Path,
+    config: &SignalConfig,
+    model: &SiteModel,
+    specs: &[signal_core::ArtifactSpec],
+    renderer: &signal_render::MiniJinjaRenderer,
+    raw_target: &str,
+) -> Result<String, BuildError> {
+    match crate::assets::explain_asset_data(root, specs, config, model, raw_target) {
+        Ok(asset) => {
+            let previous = crate::manifest::load_previous(out_dir);
+            let planned =
+                crate::build_plan::plan(specs, config, model, renderer, root, out_dir, &previous)?;
+            let decision = planned
+                .decisions
+                .iter()
+                .find(|d| d.spec().path == asset.path);
+            // A6: the same analysis `check` renders, filtered to this asset.
+            let diagnostics = crate::diagnostics::for_subject(
+                &crate::diagnostics::analyze(root, config, model, specs),
+                &asset.path,
+            );
+            Ok(render_asset(&asset, decision, &diagnostics))
+        }
+        Err(BuildError::Model { .. }) => {
+            // Not a source asset: a derivative output path explains its
+            // derivative directly, without requiring --width/--format, a
+            // social card output path explains the card (A5), and any other
+            // planned artifact — the search index (A7.1), sitemap, feeds,
+            // robots, 404, a rendered page — explains by output path.
+            let normalized = crate::assets::normalize_asset_target(raw_target)?;
+            match crate::images::derivative_for_output(config, model, &normalized) {
+                Some(deriv) => explain_derivative(
+                    root,
+                    out_dir,
+                    config,
+                    model,
+                    specs,
+                    renderer,
+                    &deriv.source,
+                    deriv.width,
+                    Some(&deriv.format.to_string()),
+                ),
+                None if signal_core::social_image_route(&normalized).is_some() => {
+                    let social = crate::assets::explain_social_data(&normalized, config, model)?;
+                    let previous = crate::manifest::load_previous(out_dir);
+                    let planned = crate::build_plan::plan(
+                        specs, config, model, renderer, root, out_dir, &previous,
+                    )?;
+                    let decision = planned
+                        .decisions
+                        .iter()
+                        .find(|d| d.spec().path == social.path);
+                    Ok(render_social(&social, decision))
+                }
+                None => {
+                    match crate::assets::explain_artifact_data(specs, config, model, &normalized)? {
+                        Some(artifact) => {
+                            let previous = crate::manifest::load_previous(out_dir);
+                            let planned = crate::build_plan::plan(
+                                specs, config, model, renderer, root, out_dir, &previous,
+                            )?;
+                            let decision = planned
+                                .decisions
+                                .iter()
+                                .find(|d| d.spec().path == artifact.path);
+                            Ok(render_artifact(&artifact, decision))
+                        }
+                        None => Err(BuildError::Model {
+                            message: format!("unknown asset {raw_target:?}"),
+                        }),
+                    }
+                }
+            }
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Convenience: ingest from disk and explain one asset in one call.
+pub fn explain_asset_from_disk(
+    root: &Path,
+    out_dir: &Path,
+    raw_target: &str,
+) -> Result<String, BuildError> {
+    let loaded = crate::pipeline::load_validated_site(root, out_dir)?;
+    explain_asset(
+        root,
+        out_dir,
+        &loaded.config,
+        &loaded.model,
+        &loaded.validated.plan.specs,
+        &loaded.validated.renderer,
+        raw_target,
+    )
+}
+
+/// Render one measured asset plus its plan decision as deterministic text.
+///
+/// Relative paths only, no timestamps, no colors. The `Size` section
+/// reports source bytes; planned derivatives (A2) render with actual
+/// output dimensions beside each output path. A6 diagnostics, when any
+/// apply to this asset, render last and are omitted entirely for a clean
+/// asset (so pre-A6 output is unchanged).
+fn render_asset(
+    asset: &crate::assets::ExplainedAsset,
+    decision: Option<&crate::build_plan::BuildDecision>,
+    diagnostics: &[crate::diagnostics::Diagnostic],
+) -> String {
+    let mut out = String::new();
+    out.push_str("Asset\n");
+    out.push_str("=====\n");
+    out.push_str(&format!("  path: {}\n", asset.path));
+    out.push_str("\nSource:\n");
+    out.push_str(&format!("  {}\n", asset.source));
+    out.push_str("\nType:\n");
+    out.push_str(&format!("  {}\n", asset.mime));
+    out.push_str("\nSize:\n");
+    out.push_str(&format!("  {} bytes\n", asset.size));
+    out.push_str("\nDependency:\n");
+    if asset.referrers.is_empty() {
+        out.push_str("  (no referencing entries)\n");
+    } else {
+        for route in &asset.referrers {
+            out.push_str(&format!("  {route}\n"));
+        }
+    }
+    out.push_str("\nOutput:\n");
+    out.push_str(&format!("  {}\n", asset.output));
+    out.push_str("\nAction:\n");
+    out.push_str("  copy\n");
+    if !asset.derivatives.is_empty() {
+        out.push_str("\nDerivatives:\n");
+        for deriv in &asset.derivatives {
+            out.push_str(&format!(
+                "  {} ({}w → {} × {})\n",
+                deriv.output, deriv.width, deriv.actual_width, deriv.actual_height
+            ));
+        }
+    }
+    out.push_str("\nDecision:\n");
+    match decision {
+        Some(crate::build_plan::BuildDecision::Reuse { .. }) => {
+            out.push_str("  reuse\n");
+        }
+        Some(crate::build_plan::BuildDecision::Rebuild { reason, .. }) => {
+            out.push_str(&format!("  rebuild: {reason}\n"));
+        }
+        None => out.push_str("  (not planned)\n"),
+    }
+    render_diagnostics(&mut out, diagnostics);
+    out
+}
+
+/// Append one explained subject's A6 diagnostics, if any, as a deterministic
+/// section. Omitted entirely when there is nothing to report, so a clean
+/// asset's record is byte-identical to its pre-A6 form.
+fn render_diagnostics(out: &mut String, diagnostics: &[crate::diagnostics::Diagnostic]) {
+    if diagnostics.is_empty() {
+        return;
+    }
+    out.push_str("\nDiagnostics:\n");
+    for diagnostic in diagnostics {
+        out.push_str(&format!(
+            "  {}: {}\n",
+            diagnostic.severity().as_str(),
+            diagnostic.message()
+        ));
+    }
+}
+
+/// Explain one requested image derivative (A2, ADR 0029): source, input
+/// and output dimensions, output path, dependencies, and the build
+/// decision for its `DerivedImage` artifact.
+///
+/// Read-only like [`render_plan`]: the same plan execution would use,
+/// then one derivative's record. `raw_target` accepts the source path
+/// (`images/hero.jpg` and its `/`-prefixed / `static/`-prefixed forms)
+/// or the derivative output path; `width` and `format_name` (`None`
+/// defaults to `"webp"`) select the request. Unplanned requests fail
+/// with a model diagnostic naming the configured widths.
+#[allow(clippy::too_many_arguments)]
+pub fn explain_derivative(
+    root: &Path,
+    out_dir: &Path,
+    config: &SignalConfig,
+    model: &SiteModel,
+    specs: &[signal_core::ArtifactSpec],
+    renderer: &signal_render::MiniJinjaRenderer,
+    raw_target: &str,
+    width: u32,
+    format_name: Option<&str>,
+) -> Result<String, BuildError> {
+    let deriv = crate::assets::explain_derivative_data(
+        root,
+        specs,
+        config,
+        model,
+        raw_target,
+        width,
+        format_name,
+    )?;
+    let previous = crate::manifest::load_previous(out_dir);
+    let planned =
+        crate::build_plan::plan(specs, config, model, renderer, root, out_dir, &previous)?;
+    let decision = planned
+        .decisions
+        .iter()
+        .find(|d| d.spec().path == deriv.output);
+    // A6: diagnostics belong to the derivative's *source* (oversized
+    // source, redundant requested widths), so filter by that subject.
+    let diagnostics = crate::diagnostics::for_subject(
+        &crate::diagnostics::analyze(root, config, model, specs),
+        &deriv.spec.source,
+    );
+    Ok(render_derivative(&deriv, decision, &diagnostics))
+}
+
+/// Convenience: ingest from disk and explain one derivative in one call.
+pub fn explain_derivative_from_disk(
+    root: &Path,
+    out_dir: &Path,
+    raw_target: &str,
+    width: u32,
+    format_name: Option<&str>,
+) -> Result<String, BuildError> {
+    let loaded = crate::pipeline::load_validated_site(root, out_dir)?;
+    explain_derivative(
+        root,
+        out_dir,
+        &loaded.config,
+        &loaded.model,
+        &loaded.validated.plan.specs,
+        &loaded.validated.renderer,
+        raw_target,
+        width,
+        format_name,
+    )
+}
+
+/// Render one derivative request plus its plan decision as deterministic
+/// text. Relative paths only, no timestamps, no colors. A6 diagnostics for
+/// the derivative's source render last when any apply.
+fn render_derivative(
+    deriv: &crate::assets::ExplainedDerivative,
+    decision: Option<&crate::build_plan::BuildDecision>,
+    diagnostics: &[crate::diagnostics::Diagnostic],
+) -> String {
+    let mut out = String::new();
+    out.push_str("Derivative\n");
+    out.push_str("==========\n");
+    out.push_str(&format!("  path: {}\n", deriv.output));
+    out.push_str("\nSource:\n");
+    out.push_str(&format!("  static/{}\n", deriv.spec.source));
+    out.push_str("\nInput:\n");
+    out.push_str(&format!(
+        "  {} × {}\n  {}\n",
+        deriv.source_dimensions.0, deriv.source_dimensions.1, deriv.source_format
+    ));
+    out.push_str("\nDerivative:\n");
+    out.push_str(&format!(
+        "  width: {}\n  height: {}\n  format: {}\n",
+        deriv.output_dimensions.0, deriv.output_dimensions.1, deriv.spec.format,
+    ));
+    out.push_str("\nOutput:\n");
+    out.push_str(&format!("  {}\n", deriv.output));
+    out.push_str("\nDependencies:\n");
+    out.push_str(&format!("  source: {}\n", deriv.spec.source));
+    if deriv.referrers.is_empty() {
+        out.push_str("  (no consuming entries)\n");
+    } else {
+        for route in &deriv.referrers {
+            out.push_str(&format!("  page: {route}\n"));
+        }
+    }
+    // The responsive representation rendering embeds, selected by the
+    // same function the rewriter and hero contexts use: fallback first,
+    // then one group per planned format in `<source>` order.
+    if let Some(responsive) = deriv.responsive.as_ref() {
+        out.push_str("\nResponsive:\n");
+        out.push_str(&format!("  fallback: {}\n", responsive.default_src));
+        out.push_str(&format!("  sizes: {}\n", responsive.sizes));
+        for group in &responsive.sources {
+            out.push_str(&format!("  {}:\n", group.format));
+            for candidate in &group.candidates {
+                out.push_str(&format!("    {} {}w\n", candidate.url, candidate.width));
+            }
+        }
+    }
+    out.push_str("\nAction:\n");
+    out.push_str("  generate\n");
+    out.push_str("\nDecision:\n");
+    match decision {
+        Some(crate::build_plan::BuildDecision::Reuse { .. }) => {
+            out.push_str("  reuse\n");
+        }
+        Some(crate::build_plan::BuildDecision::Rebuild { reason, .. }) => {
+            out.push_str(&format!("  rebuild: {reason}\n"));
+        }
+        None => out.push_str("  (not planned)\n"),
+    }
+    render_diagnostics(&mut out, diagnostics);
+    out
+}
+
+/// Render one page's social-image record plus its plan decision as
+/// deterministic text (A5, ADR 0032).
+///
+/// Relative paths only, no timestamps, no colors. The inputs section names
+/// exactly what the generator consumes, in the same order the artifact
+/// declares them: page metadata (title, optional description, optional
+/// author), the optional composited hero, and configuration. Non-planned
+/// states render a fixed decision line instead of a plan lookup.
+fn render_social(
+    social: &crate::assets::ExplainedSocial,
+    decision: Option<&crate::build_plan::BuildDecision>,
+) -> String {
+    use crate::assets::SocialExplainState;
+    let mut out = String::new();
+    out.push_str("Social image\n");
+    out.push_str("============\n");
+    out.push_str(&format!("  path: {}\n", social.path));
+    out.push_str("\nPage:\n");
+    out.push_str(&format!("  {}\n", social.route));
+    out.push_str(&format!("  {}\n", social.source));
+    match social.dimensions {
+        Some((width, height)) => {
+            out.push_str("\nDimensions:\n");
+            out.push_str(&format!("  {width} × {height}\n"));
+        }
+        None => out.push_str("\nDimensions:\n  (not configured)\n"),
+    }
+    out.push_str("\nInputs:\n");
+    out.push_str(&format!("  title: {}\n", social.title));
+    if let Some(description) = &social.description {
+        out.push_str(&format!("  description: {description}\n"));
+    }
+    if let Some(author) = &social.author {
+        out.push_str(&format!("  author: {author}\n"));
+    }
+    if let Some(hero) = &social.hero {
+        out.push_str(&format!("  hero: {hero}\n"));
+    }
+    out.push_str("  configuration: [social]\n");
+    out.push_str("\nOutput:\n");
+    out.push_str(&format!("  {}\n", social.path));
+    out.push_str("\nAction:\n");
+    out.push_str(match social.state {
+        SocialExplainState::Planned => "  generate\n",
+        _ => "  (none)\n",
+    });
+    out.push_str("\nDecision:\n");
+    match social.state {
+        SocialExplainState::Disabled => out.push_str("  disabled\n"),
+        SocialExplainState::OptedOut => {
+            out.push_str("  opted out (front matter social_image: false)\n")
+        }
+        SocialExplainState::Listing => out.push_str("  not planned (section roots are listings)\n"),
+        SocialExplainState::Planned => match decision {
+            Some(crate::build_plan::BuildDecision::Reuse { .. }) => out.push_str("  reuse\n"),
+            Some(crate::build_plan::BuildDecision::Rebuild { reason, .. }) => {
+                out.push_str(&format!("  rebuild: {reason}\n"));
+            }
+            None => out.push_str("  (not planned)\n"),
+        },
+    }
+    out
+}
+
+/// Render one planned artifact's record plus its plan decision as
+/// deterministic text (A7.1).
+///
+/// Relative paths only, no timestamps, no colors. The `Inputs` section
+/// names exactly what the artifact declares, in declaration order, using
+/// the same [`artifact_inputs`](crate::build_plan::artifact_inputs)
+/// derivation the build plans from; the `Documents` section appears only
+/// for the search index, whose document count is part of its contract.
+fn render_artifact(
+    artifact: &crate::assets::ExplainedArtifact,
+    decision: Option<&crate::build_plan::BuildDecision>,
+) -> String {
+    let mut out = String::new();
+    out.push_str("Artifact\n");
+    out.push_str("========\n");
+    out.push_str(&format!("  path: {}\n", artifact.path));
+    out.push_str("\nKind:\n");
+    out.push_str(&format!("  {:?}\n", artifact.kind));
+    out.push_str("\nInputs:\n");
+    for input in &artifact.inputs {
+        out.push_str(&format!("  {}\n", render_input(input)));
+    }
+    if let Some(documents) = artifact.documents {
+        out.push_str("\nDocuments:\n");
+        out.push_str(&format!("  {documents}\n"));
+    }
+    out.push_str("\nDecision:\n");
+    match decision {
+        Some(crate::build_plan::BuildDecision::Reuse { .. }) => out.push_str("  reuse\n"),
+        Some(crate::build_plan::BuildDecision::Rebuild { reason, .. }) => {
+            out.push_str(&format!("  rebuild: {reason}\n"));
+        }
+        None => out.push_str("  (not planned)\n"),
+    }
+    out
+}
+
+/// Render one declared input reference in the CLI's compact vocabulary:
+/// `Query(search_documents)`, `Entry(/posts/alpha/)`, `TemplateSet`,
+/// `Config`, `Static(images/a.svg)`, `DerivedImage(images/a.jpg, 640w, webp)`.
+fn render_input(input: &crate::manifest::InputRef) -> String {
+    use crate::manifest::InputRef;
+    match input {
+        InputRef::Entry { route } => format!("Entry({route})"),
+        InputRef::Query { key } => format!("Query({key})"),
+        InputRef::Template { name } => format!("Template({name})"),
+        InputRef::TemplateSet => "TemplateSet".to_string(),
+        InputRef::Config => "Config".to_string(),
+        InputRef::Static { path } => format!("Static({path})"),
+        InputRef::DerivedImage {
+            source,
+            width,
+            format,
+        } => format!("DerivedImage({source}, {width}w, {format})"),
+    }
+}
+
 /// Convenience: ingest from disk and explain in one call (used by the CLI).
 pub fn explain_site_from_disk(root: &Path, out_dir: &Path) -> Result<String, BuildError> {
     let loaded = crate::pipeline::load_validated_site(root, out_dir)?;
@@ -252,6 +692,12 @@ mod tests {
                 },
                 "static file changed: images/foo.png",
             ),
+            (
+                RebuildReason::DerivativeChanged {
+                    source: "images/hero.jpg".to_string(),
+                },
+                "derivative source changed: images/hero.jpg",
+            ),
             (RebuildReason::OutputMissing, "output missing"),
             (RebuildReason::OutputChanged, "output changed"),
             (
@@ -261,7 +707,7 @@ mod tests {
                 "input error: boom",
             ),
         ];
-        assert_eq!(cases.len(), 14);
+        assert_eq!(cases.len(), 15);
         for (reason, expected) in &cases {
             assert_eq!(reason.to_string(), *expected, "reason {reason:?}");
         }

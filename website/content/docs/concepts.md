@@ -48,9 +48,15 @@ Artifacts can be pages, section indexes, the home page, taxonomy pages, RSS feed
 
 After planning and before writing anything, Signal validates structured internal references — Markdown links and images, front-matter images, and menu targets — against the inventory of what the build will generate. A broken reference fails the build with the output tree and manifest untouched. See [Reference validation](../validation/).
 
+## Diagnostics
+
+`signal check` and `signal explain` also report advisory diagnostics derived from the same model and plan: unreferenced raster assets, sources far larger than the largest representation Signal generates, configured widths that clamp to the same output, and missing or empty image alt text. They are evidence, not advice — `warning` or `info`, never a failure — and are not artifacts: nothing is written, pruned, or recorded. See [Reference validation](../validation/) and ADR 0033.
+
 ## Determinism
 
 Source discovery, model indexes, generated artifacts, and manifest structures are ordered consistently. The goal is that identical inputs produce identical output: two clean builds of the same site with the same Signal build are byte-identical, including the manifest.
+
+Generated social images are part of that guarantee: the font is compiled into the binary (never read from the build machine), the layout is pure math, and the PNG encoder settings are pinned, so a card is byte-identical everywhere.
 
 Signal does not make performance claims yet.
 

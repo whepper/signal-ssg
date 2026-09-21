@@ -23,18 +23,24 @@
 
 #![forbid(unsafe_code)]
 
+pub mod assets;
+pub(crate) mod body_html;
 pub mod build;
 pub mod build_plan;
 pub mod config;
+pub mod diagnostics;
 pub mod discover;
 pub mod errors;
 pub mod explain;
 pub mod git;
+pub mod images;
 pub mod ingest;
 pub mod link_check;
 pub mod manifest;
 pub mod pipeline;
+pub mod responsive;
 pub mod serve;
+pub mod social;
 
 pub use build::{
     build_site, build_site_from_disk, load_templates, resolve_artifact, BuildSummary,

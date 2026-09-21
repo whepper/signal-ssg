@@ -45,6 +45,19 @@ pub struct SignalConfig {
     /// file is planned.
     #[serde(default)]
     pub robots: Option<RobotsConfig>,
+    /// Image derivative settings. Presence of the `[images]` table with a
+    /// non-empty `widths` list opts the site into generated WebP
+    /// derivatives of content-referenced raster sources (A2, ADR 0029).
+    /// Absent (the default) plans nothing: output is byte-identical to a
+    /// build without derivatives.
+    #[serde(default)]
+    pub images: Option<ImagesConfig>,
+    /// Social-image settings. Presence of the `[social]` table opts the
+    /// site into generated Open Graph/Twitter card PNGs, one per
+    /// participating entry page (A5, ADR 0032). Absent (the default)
+    /// plans nothing and leaves output byte-identical.
+    #[serde(default)]
+    pub social: Option<SocialConfig>,
     /// Output settings. Absent means defaults (no minification).
     #[serde(default)]
     pub output: OutputConfig,
@@ -187,6 +200,76 @@ pub struct RelatedConfig {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RobotsConfig {}
 
+/// Image derivative settings (A2, ADR 0029; multi-format since A4,
+/// ADR 0031).
+///
+/// Presence of the `[images]` table requests generated derivatives —
+///
+/// ```toml
+/// [images]
+/// widths = [640, 1280, 1920]
+/// formats = ["avif", "webp"]
+/// ```
+///
+/// — one `{stem}-{width}.{ext}` artifact per content-referenced raster
+/// source (PNG/JPEG) per width per format. The legacy singular `format =
+/// "webp"` remains valid and means exactly one format; `formats`, when
+/// non-empty, wins over `format`, and setting both is a configuration
+/// error (ambiguous intent fails clearly rather than guessing). An empty
+/// `formats` list behaves as absent. Supported values are `"avif"` and
+/// `"webp"`; anything else fails in the shared config gates. Widths are
+/// sorted and deduplicated at use; `0` fails. An absent table or an empty
+/// widths list plans no derivatives. SVG, GIF, and other assets are never
+/// rasterized: they stay verbatim static outputs.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImagesConfig {
+    /// Requested output widths in pixels, e.g. `[640, 1280, 1920]`.
+    #[serde(default)]
+    pub widths: Vec<u32>,
+    /// Output format. Only `"webp"` was supported in A2; `"avif"` joined
+    /// in A4. Prefer `formats` for more than one format.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Output formats, e.g. `["avif", "webp"]`. Non-empty wins over
+    /// `format`; setting both is an error.
+    #[serde(default)]
+    pub formats: Vec<String>,
+}
+
+/// Social-image settings (A5, ADR 0032).
+///
+/// Presence of the `[social]` table opts the site into generated social
+/// cards —
+///
+/// ```toml
+/// [social]
+/// width = 1200
+/// height = 630
+/// ```
+///
+/// — one deterministic PNG per participating entry page, exposed to
+/// templates as Open Graph/Twitter image metadata. `enabled = false`
+/// keeps the table but plans nothing; `width`/`height` default to
+/// 1200 × 630 and must be within 1 ..= [`crate::MAX_SOCIAL_DIMENSION`].
+/// Social images need absolute URLs, so generation additionally requires
+/// `site.base_url`. Pages opt out individually with front-matter
+/// `social_image: false`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SocialConfig {
+    /// Whether the feature is on. Absent means on: writing `[social]` is
+    /// itself the opt-in.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Card width in pixels. Defaults to
+    /// [`DEFAULT_SOCIAL_WIDTH`](crate::DEFAULT_SOCIAL_WIDTH).
+    #[serde(default)]
+    pub width: Option<u32>,
+    /// Card height in pixels. Defaults to
+    /// [`DEFAULT_SOCIAL_HEIGHT`](crate::DEFAULT_SOCIAL_HEIGHT).
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
 /// Output settings.
 ///
 /// Present as the `[output]` table. Everything here is off unless explicitly
@@ -277,6 +360,93 @@ impl SignalConfig {
     /// Off unless explicitly configured.
     pub fn minify_html(&self) -> bool {
         self.output.minify_html
+    }
+
+    /// Effective derivative widths: configured `[images] widths`, sorted
+    /// and deduplicated. Empty unless derivatives are requested. Zero
+    /// widths are preserved here and rejected in the config gates (a
+    /// content-style diagnostic beats silent filtering).
+    pub fn image_widths(&self) -> Vec<u32> {
+        let mut widths: Vec<u32> = self
+            .images
+            .as_ref()
+            .map(|images| images.widths.clone())
+            .unwrap_or_default();
+        widths.sort();
+        widths.dedup();
+        widths
+    }
+
+    /// Effective derivative format: configured `[images] format`
+    /// (trimmed, lowercased for comparison), if any.
+    pub fn image_format(&self) -> Option<String> {
+        self.images
+            .as_ref()
+            .and_then(|images| images.format.clone())
+            .map(|format| format.trim().to_ascii_lowercase())
+            .filter(|format| !format.is_empty())
+    }
+
+    /// Effective derivative formats (A4): configured `[images] formats`
+    /// when non-empty, else the legacy singular `format`, else the
+    /// `"webp"` default. Trimmed, lowercased, empties dropped,
+    /// deduplicated, alphabetically ordered — which coincides with
+    /// `<source>` order (`avif` < `webp`) while keeping author-chosen
+    /// order out of build identity entirely.
+    pub fn image_formats(&self) -> Vec<String> {
+        let raw: Vec<String> = match self.images.as_ref() {
+            None => Vec::new(),
+            Some(images) if !images.formats.iter().any(|f| !f.trim().is_empty()) => {
+                match self.image_format() {
+                    Some(format) => vec![format],
+                    None => Vec::new(),
+                }
+            }
+            Some(images) => images.formats.clone(),
+        };
+        let mut out: Vec<String> = raw
+            .into_iter()
+            .map(|format| format.trim().to_ascii_lowercase())
+            .filter(|format| !format.is_empty())
+            .collect();
+        out.sort();
+        out.dedup();
+        if out.is_empty() {
+            if self.images.is_some() {
+                // A `[images]` table with no usable format names still
+                // means WebP: `formats = []` behaves as absent (A4).
+                return vec!["webp".to_string()];
+            }
+            return Vec::new();
+        }
+        out
+    }
+
+    /// Whether generated social images are enabled (A5, ADR 0032).
+    ///
+    /// The `[social]` table's presence is the opt-in; `enabled = false`
+    /// keeps the table but plans nothing.
+    pub fn social_enabled(&self) -> bool {
+        self.social
+            .as_ref()
+            .is_some_and(|social| social.enabled.unwrap_or(true))
+    }
+
+    /// Effective social-card dimensions, when the feature is enabled.
+    ///
+    /// `None` when `[social]` is absent or disabled, so callers treat
+    /// "not configured" and "configured off" identically. Field defaults
+    /// are applied per-field; range validation happens in the shared
+    /// config gates.
+    pub fn social_size(&self) -> Option<(u32, u32)> {
+        if !self.social_enabled() {
+            return None;
+        }
+        let social = self.social.as_ref()?;
+        Some((
+            social.width.unwrap_or(crate::DEFAULT_SOCIAL_WIDTH),
+            social.height.unwrap_or(crate::DEFAULT_SOCIAL_HEIGHT),
+        ))
     }
 
     /// Collection ids declared in configuration, in deterministic order.

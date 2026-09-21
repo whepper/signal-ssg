@@ -20,6 +20,11 @@ signal-generators = { workspace = true }
 signal-markdown = { workspace = true }
 signal-render = { workspace = true }
 clap = { workspace = true }
+image = { workspace = true }
+ab_glyph = { workspace = true }
+ravif = { workspace = true }
+rgb = { workspace = true }
+imgref = { workspace = true }
 miette = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

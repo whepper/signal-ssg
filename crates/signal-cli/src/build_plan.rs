@@ -36,8 +36,8 @@
 //!
 //! | `ArtifactKind` | `artifact_inputs` declares | `resolve_artifact` consumes |
 //! |----------------|---------------------------|------------------------------|
-//! | `Page` | `Entry{route}` + `Query{related:{route}}` + `TemplateSet` + `Config` | entry lookup + `entry_context` (incl. related) + selected template + config |
-//! | `CollectionIndex` | `Query{summaries:{coll}}` (+ `Entry{route}` when a section-root entry exists) + `TemplateSet` + `Config` | `section_context` (summaries + optional section-root entry) + selected template + config |
+//! | `Page` | `Entry{route}` + `Query{related:{route}}` + `TemplateSet` + `Config` + `Static{…}` per referenced asset + `DerivedImage{…}` per requested derivative | entry lookup + `entry_context` (incl. related) + selected template + config |
+//! | `CollectionIndex` | `Query{summaries:{coll}}` (+ `Entry{route}` + its asset `Static{…}` + its `DerivedImage{…}` when a section-root entry exists) + `TemplateSet` + `Config` | `section_context` (summaries + optional section-root entry) + selected template + config |
 //! | `Home` | `Query{home:{coll}}` + `TemplateSet` + `Config` | `home_context` (featured + recent) + selected template + config |
 //! | `Taxonomy` (index) | `Query{topic_terms}` + `TemplateSet` + `Config` | `topic_terms` + index template + config |
 //! | `Taxonomy` (term) | `Query{tagged:{label}}` + `TemplateSet` + `Config` | `topic_terms` term lookup + term template + config |
@@ -45,8 +45,29 @@
 //! | `Sitemap` | `Query{routes_inventory}` + `Config` | `resolve_sitemap` (same inventory + sections + taxonomy root) + config |
 //! | `SearchIndex` | `Query{search_documents}` | `search_documents` (no config) |
 //! | `Static` | `Static{path}` | `static/<path>` bytes verbatim |
+//! | `DerivedImage` | `DerivedImage{source,width,format}` | `resolve_derived_image`: decode source, clamp, Lanczos3 resize, lossless-WebP encode |
 //! | `Robots` | `Config` | `base_url` from config |
 //! | `NotFound` | `TemplateSet` + `Config` | `resolve_not_found` (template set + config) |
+//!
+//! Asset edges (A1, `docs/adr/0028`): a page names the source assets its
+//! entry references (front-matter hero plus Markdown body images) as
+//! `InputRef::Static` — the existing static-input kind, not a parallel
+//! edge type. Changing an asset's bytes therefore invalidates the pages
+//! that embed it, which is what makes the future A2 graph (`hero.jpg` →
+//! derivatives → pages embedding `srcset`/dimensions) a pure extension:
+//! derivatives will appear as further inputs/outputs on the same edges.
+//! Listings (`CollectionIndex` without a section root, `Home`, `Taxonomy`)
+//! keep their query-only coverage in A1: their summaries carry the image
+//! *reference string* (already inside the query digest), and no A1 bytes
+//! embed asset dimensions. A section page that renders a section-root
+//! entry's body names that entry's assets, like a page does. Derivative
+//! edges (A2, `docs/adr/0029`) follow the same shape one level down:
+//! pages and section pages name `DerivedImage{source,width,format}` for
+//! every derivative their references request, and each `DerivedImage`
+//! artifact names its own triple. Parameters ride the reference, so
+//! parameter changes are `InputsChanged`; byte comparison reuses the
+//! manifest `assets` source map, so source changes are
+//! `DerivativeChanged` — never a comparison against page HTML.
 //!
 //! Shared derivations (`feed_identity`, `collection_for_section_route`,
 //! `section_title`, template selection, `feed_limit`, `related_limit`,
@@ -130,6 +151,15 @@ pub enum RebuildReason {
         /// Static path relative to `static/`.
         path: String,
     },
+    /// A derivative's source image bytes differ from the recorded source
+    /// digest (A2, ADR 0029). Parameters ride the input reference itself,
+    /// so this reason strictly means the *source* changed; parameter
+    /// changes surface as `InputsChanged` (and usually as `MissingRecord`
+    /// first, since parameters are baked into output paths).
+    DerivativeChanged {
+        /// Source path relative to `static/`.
+        source: String,
+    },
     /// The existing output file is missing, unreadable, or not a regular
     /// file (directories and symlinks never count as reusable outputs).
     OutputMissing,
@@ -163,6 +193,9 @@ impl std::fmt::Display for RebuildReason {
             RebuildReason::TemplateChanged { name } => write!(f, "template changed: {name}"),
             RebuildReason::ConfigChanged => write!(f, "configuration changed"),
             RebuildReason::StaticChanged { path } => write!(f, "static file changed: {path}"),
+            RebuildReason::DerivativeChanged { source } => {
+                write!(f, "derivative source changed: {source}")
+            }
             RebuildReason::OutputMissing => write!(f, "output missing"),
             RebuildReason::OutputChanged => write!(f, "output changed"),
             RebuildReason::InputError { message } => write!(f, "input error: {message}"),
@@ -283,7 +316,7 @@ pub(crate) fn artifact_inputs(
                 .ok_or_else(|| BuildError::Model {
                     message: format!("no entry for route {route}"),
                 })?;
-            Ok(vec![
+            let mut inputs = vec![
                 InputRef::Entry {
                     route: entry.route.0.clone(),
                 },
@@ -295,7 +328,24 @@ pub(crate) fn artifact_inputs(
                 },
                 InputRef::TemplateSet,
                 InputRef::Config,
-            ])
+            ];
+            // First-class assets (A1): the page embeds its entry's
+            // referenced source assets, so their bytes are page inputs.
+            // Sorted for deterministic manifest records.
+            for path in signal_core::entry_asset_paths(entry) {
+                inputs.push(InputRef::Static { path });
+            }
+            // Image derivatives (A2): the page will embed the generated
+            // variants of its referenced raster sources, so each
+            // derivative edge is a page input too.
+            for deriv in crate::images::entry_derivatives(config, entry)? {
+                inputs.push(InputRef::DerivedImage {
+                    source: deriv.source,
+                    width: deriv.width,
+                    format: deriv.format.to_string(),
+                });
+            }
+            Ok(inputs)
         }
         ArtifactKind::CollectionIndex => {
             let route = spec.route.as_ref().ok_or_else(|| BuildError::Model {
@@ -314,13 +364,26 @@ pub(crate) fn artifact_inputs(
                 InputRef::TemplateSet,
                 InputRef::Config,
             ];
-            if model.lookup_by_route(route).is_some() {
+            if let Some(section_root) = model.lookup_by_route(route) {
                 inputs.insert(
                     0,
                     InputRef::Entry {
                         route: route.0.clone(),
                     },
                 );
+                // The section page renders the section-root entry's body,
+                // so its referenced assets are section inputs too.
+                for path in signal_core::entry_asset_paths(section_root) {
+                    inputs.push(InputRef::Static { path });
+                }
+                // …and the derivatives of those assets, like a page.
+                for deriv in crate::images::entry_derivatives(config, section_root)? {
+                    inputs.push(InputRef::DerivedImage {
+                        source: deriv.source,
+                        width: deriv.width,
+                        format: deriv.format.to_string(),
+                    });
+                }
             }
             Ok(inputs)
         }
@@ -407,6 +470,41 @@ pub(crate) fn artifact_inputs(
         ArtifactKind::Static => Ok(vec![InputRef::Static {
             path: spec.path.clone(),
         }]),
+        ArtifactKind::DerivedImage => {
+            // The path-to-request inversion is shared verbatim with
+            // resolution (`resolve_derived_image`): the planned output
+            // path always maps back to the triple that produced it.
+            let deriv = crate::images::derivative_for_output(config, model, &spec.path)
+                .ok_or_else(|| BuildError::Model {
+                    message: format!("unrecognized derivative path {:?}", spec.path),
+                })?;
+            Ok(vec![InputRef::DerivedImage {
+                source: deriv.source,
+                width: deriv.width,
+                format: deriv.format.to_string(),
+            }])
+        }
+        ArtifactKind::SocialImage => {
+            // The path-to-page inversion is shared verbatim with
+            // resolution (`resolve_social_image`). A social card consumes
+            // page metadata (the entry digest), its configuration
+            // (dimensions, site identity), and — when one is composited —
+            // the hero source bytes. Generator identity (font, layout,
+            // encoder) rides the generation behavior gate, exactly like
+            // the derivative encoders; the page's HTML digest is never an
+            // input (ADR 0032).
+            let planned = crate::social::planned_social(model, &spec.path)?;
+            let mut inputs = vec![
+                InputRef::Entry {
+                    route: planned.route,
+                },
+                InputRef::Config,
+            ];
+            if let Some(hero) = planned.hero {
+                inputs.push(InputRef::Static { path: hero });
+            }
+            Ok(inputs)
+        }
         // robots.txt is a pure function of the base URL (config), and the
         // themed 404 page is rendered from the template set plus config;
         // neither consumes entries or queries.
@@ -463,18 +561,41 @@ fn current_input_digest(
         }
         InputRef::TemplateSet => Ok(digest_json(templates)),
         InputRef::Config => Ok(config_digest.clone()),
-        InputRef::Static { path } => {
-            // Static resolve reads `static/<path>` under the site root;
-            // digest the same bytes. (Containment holds: spec paths passed
-            // plan validation, and this join never escapes `static/` for
-            // validated components.)
-            let source = root.join("static").join(path);
-            std::fs::read(&source).map_err(|e| BuildError::Read {
+        InputRef::Static { path } => read_static_bytes(root, path),
+        // Derivative inputs digest the *source* bytes: parameters ride
+        // the reference itself (canonical-list comparison), and the
+        // encoder identity rides the behavior gate — so the byte side
+        // compares exactly like a static source.
+        InputRef::DerivedImage { source, .. } => read_static_bytes(root, source),
+    }
+}
+
+/// Digest one `static/`-relative source file: raw form first, then the
+/// percent-decoded form (the precedence `link_check` validates with).
+fn read_static_bytes(root: &Path, path: &str) -> Result<Digest, BuildError> {
+    // Containment holds: spec paths passed plan validation, and this join
+    // never escapes `static/` for validated components.
+    let source = root.join("static").join(path);
+    match std::fs::read(&source) {
+        Ok(bytes) => Ok(crate::manifest::digest_bytes(&bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(decoded) = signal_core::percent_decode(path) {
+                if decoded != *path {
+                    let fallback = root.join("static").join(&decoded);
+                    if let Ok(bytes) = std::fs::read(&fallback) {
+                        return Ok(crate::manifest::digest_bytes(&bytes));
+                    }
+                }
+            }
+            Err(BuildError::Read {
                 path: source.display().to_string(),
                 message: e.to_string(),
             })
         }
-        .map(|bytes| digest_bytes(&bytes)),
+        Err(e) => Err(BuildError::Read {
+            path: source.display().to_string(),
+            message: e.to_string(),
+        }),
     }
 }
 
@@ -587,9 +708,20 @@ pub(crate) fn decide_artifact(
             InputRef::Template { name } => prev.templates.get(name),
             InputRef::TemplateSet => Some(&previous_template_set),
             InputRef::Config => Some(&prev.config_digest),
-            // Static sources have no digest map: the recorded output
-            // digest IS the source digest (verbatim passthrough).
-            InputRef::Static { .. } => Some(&record.output_digest),
+            // Source-asset bytes are recorded once in the manifest's
+            // `assets` map (and coincide with the `Static` artifact's
+            // output digest). Both the `Static` artifact itself and the
+            // pages/sections embedding the asset compare against that
+            // map — never against a referencing page's HTML digest.
+            // Lookup is raw-then-decoded, mirroring validation, so an
+            // authored encoded reference matches its on-disk record.
+            InputRef::Static { path } => crate::manifest::asset_digest(&prev.assets, path),
+            // Derivative inputs compare the same source map: parameters
+            // are structural (canonical-list comparison above), so the
+            // byte side is identical to a static source.
+            InputRef::DerivedImage { source, .. } => {
+                crate::manifest::asset_digest(&prev.assets, source)
+            }
         };
         if previous != Some(&current) {
             let reason = match input {
@@ -601,6 +733,9 @@ pub(crate) fn decide_artifact(
                 InputRef::TemplateSet => Reason::TemplateSetChanged,
                 InputRef::Config => Reason::ConfigChanged,
                 InputRef::Static { path } => Reason::StaticChanged { path: path.clone() },
+                InputRef::DerivedImage { source, .. } => Reason::DerivativeChanged {
+                    source: source.clone(),
+                },
             };
             return BuildDecision::Rebuild {
                 spec: spec.clone(),
@@ -1057,6 +1192,97 @@ mod tests {
     }
 
     #[test]
+    fn social_image_inputs_and_resolution_agree() {
+        // A5 structural guard (the `artifact_inputs_cover_resolution`
+        // shape, for `ArtifactKind::SocialImage`): the card declares entry
+        // + config + hero source, every declared input digests against
+        // current state, and resolution produces real PNG bytes.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = tempfile::tempdir().expect("tempdir");
+        write_site(
+            dir.path(),
+            &[
+                (
+                    "signal.toml",
+                    "[site]\ntitle = \"T\"\nbase_url = \"https://example.com/\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n[social]\n",
+                ),
+                (
+                    "content/posts/alpha.md",
+                    "---\ntitle: Alpha\ndescription: D\nimage: images/hero.png\n---\n\nBody words here.\n",
+                ),
+                (
+                    "templates/post.html",
+                    "<html><body>{{ content | safe }}</body></html>",
+                ),
+                (
+                    "templates/section.html",
+                    "<html><body>section</body></html>",
+                ),
+            ],
+        );
+        // A deterministic raster hero, encoded here (no binary fixtures).
+        {
+            use image::ImageEncoder as _;
+            let mut image = image::RgbImage::new(40, 20);
+            for (x, y, pixel) in image.enumerate_pixels_mut() {
+                pixel.0 = [(x % 256) as u8, (y % 256) as u8, 128];
+            }
+            let mut bytes = Vec::new();
+            image::codecs::png::PngEncoder::new(&mut bytes)
+                .write_image(image.as_raw(), 40, 20, image::ExtendedColorType::Rgb8)
+                .expect("hero encodes");
+            let path = dir.path().join("static/images/hero.png");
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            std::fs::write(path, bytes).expect("write");
+        }
+        let summary = crate::build::build_site_from_disk(dir.path(), out.path()).expect("builds");
+        let card = summary
+            .specs
+            .iter()
+            .find(|spec| spec.kind == signal_core::ArtifactKind::SocialImage)
+            .expect("card planned")
+            .clone();
+        assert_eq!(card.path, "social/posts/alpha.png");
+
+        let text = std::fs::read_to_string(dir.path().join("signal.toml")).expect("config");
+        let config: SignalConfig = toml::from_str(&text).expect("parses");
+        let (model, _) = crate::ingest::ingest_site(dir.path(), &config).expect("model");
+        let renderer = crate::build::load_templates(dir.path()).expect("renderer");
+
+        let inputs = artifact_inputs(&card, &config, &model).expect("inputs derive");
+        assert_eq!(inputs.len(), 3, "got: {inputs:?}");
+        assert!(matches!(inputs[0], InputRef::Entry { .. }), "{inputs:?}");
+        assert!(matches!(inputs[1], InputRef::Config), "{inputs:?}");
+        match &inputs[2] {
+            InputRef::Static { path } => assert_eq!(path, "images/hero.png"),
+            other => panic!("expected the hero source, got {other:?}"),
+        }
+        for input in &inputs {
+            match input {
+                InputRef::Entry { route } => {
+                    entry_digest(
+                        model
+                            .lookup_by_route(&Route::new(route.clone()))
+                            .expect("entry exists"),
+                    );
+                }
+                InputRef::Config => {
+                    config_digest(&config);
+                }
+                InputRef::Static { path } => {
+                    let bytes =
+                        std::fs::read(dir.path().join("static").join(path)).expect("hero reads");
+                    digest_bytes(&bytes);
+                }
+                other => panic!("unexpected input {other:?}"),
+            }
+        }
+        let bytes = crate::build::resolve_artifact(&card, &config, dir.path(), &model, &renderer)
+            .expect("resolves");
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[test]
     fn artifact_inputs_cover_resolution() {
         // Structural guard against resolve↔inputs drift: every planned
         // spec must yield a non-empty input declaration, every declared
@@ -1085,6 +1311,11 @@ mod tests {
                             .expect("static reads");
                         Some(digest_bytes(&bytes))
                     }
+                    InputRef::DerivedImage { source, .. } => {
+                        let bytes = std::fs::read(ctx.root.join("static").join(source))
+                            .expect("derivative source reads");
+                        Some(digest_bytes(&bytes))
+                    }
                     InputRef::Template { .. } => None,
                 };
                 assert!(digest.is_some(), "input {input:?} must digest");
@@ -1093,5 +1324,397 @@ mod tests {
             crate::build::resolve_artifact(spec, &ctx.config, &ctx.root, &ctx.model, &ctx.renderer)
                 .expect("resolves");
         }
+    }
+
+    /// Minimal site whose entry references a hero asset, kept alive so
+    /// decisions can digest against its files.
+    struct HeroCtx {
+        root: std::path::PathBuf,
+        out: std::path::PathBuf,
+        config: SignalConfig,
+        model: SiteModel,
+        renderer: signal_render::MiniJinjaRenderer,
+        specs: Vec<ArtifactSpec>,
+        page: ArtifactSpec,
+        _dir: tempfile::TempDir,
+        _out: tempfile::TempDir,
+    }
+
+    impl HeroCtx {
+        fn build() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let out = tempfile::tempdir().expect("tempdir");
+            write_site(
+                dir.path(),
+                &[
+                    (
+                        "signal.toml",
+                        "[site]\ntitle = \"Plan\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n",
+                    ),
+                    (
+                        "content/posts/hero.md",
+                        "---\ntitle: Hero\nimage: images/hero.jpg\n---\n\nBody ![alt](/images/hero.jpg).\n",
+                    ),
+                    (
+                        "templates/post.html",
+                        "<html><body>{{ content | safe }}</body></html>",
+                    ),
+                    (
+                        "templates/section.html",
+                        "<html><body>section</body></html>",
+                    ),
+                    ("static/images/hero.jpg", "hero-bytes"),
+                ],
+            );
+            let out_dir = out.path().join("out");
+            let summary = crate::build::build_site_from_disk(dir.path(), &out_dir).expect("builds");
+            let text =
+                std::fs::read_to_string(dir.path().join("signal.toml")).expect("config text");
+            let config: SignalConfig = toml::from_str(&text).expect("config parses");
+            let (model, _) = crate::ingest::ingest_site(dir.path(), &config).expect("model");
+            let renderer = crate::build::load_templates(dir.path()).expect("renderer");
+            let page = summary
+                .specs
+                .iter()
+                .find(|s| s.path == "posts/hero/index.html")
+                .expect("page spec")
+                .clone();
+            Self {
+                root: dir.path().to_path_buf(),
+                out: out_dir,
+                config,
+                model,
+                renderer,
+                specs: summary.specs,
+                page,
+                _dir: dir,
+                _out: out,
+            }
+        }
+
+        fn usable(&self) -> Manifest {
+            match crate::manifest::load_previous(&self.out) {
+                PreviousManifest::Usable(manifest) => manifest,
+                other => panic!("expected usable manifest, got {other:?}"),
+            }
+        }
+
+        fn decide(&self, manifest: &Manifest) -> BuildDecision {
+            decide_artifact(
+                &self.page,
+                &self.config,
+                &self.root,
+                &self.model,
+                &template_digests(&self.renderer).expect("digests"),
+                &config_digest(&self.config),
+                manifest,
+                &self.out,
+            )
+        }
+    }
+
+    #[test]
+    fn page_with_hero_names_static_input() {
+        let ctx = HeroCtx::build();
+        let inputs = artifact_inputs(&ctx.page, &ctx.config, &ctx.model).expect("inputs derive");
+        assert!(
+            inputs.contains(&InputRef::Static {
+                path: "images/hero.jpg".to_string()
+            }),
+            "page inputs must name the hero asset: {inputs:?}"
+        );
+        // The full plan covers resolution for the asset-bearing site too.
+        let planned = plan(
+            &ctx.specs,
+            &ctx.config,
+            &ctx.model,
+            &ctx.renderer,
+            &ctx.root,
+            &ctx.out,
+            &PreviousManifest::Absent,
+        )
+        .expect("plans");
+        assert_eq!(planned.rebuilt_count(), ctx.specs.len());
+    }
+
+    #[test]
+    fn manifest_records_asset_digests_for_consumers() {
+        let ctx = HeroCtx::build();
+        let manifest = ctx.usable();
+        assert!(
+            manifest.assets.contains_key("images/hero.jpg"),
+            "manifest must record source-asset digests"
+        );
+        let record = manifest
+            .artifacts
+            .get("posts/hero/index.html")
+            .expect("page record");
+        assert!(record.inputs.iter().any(|i| matches!(
+            i,
+            InputRef::Static { path } if path == "images/hero.jpg"
+        )));
+    }
+
+    #[test]
+    fn unchanged_asset_reuses_embedding_page() {
+        let ctx = HeroCtx::build();
+        let manifest = ctx.usable();
+        assert!(ctx.decide(&manifest).is_reuse());
+    }
+
+    #[test]
+    fn tampered_asset_digest_rebuilds_embedding_page() {
+        let ctx = HeroCtx::build();
+        let mut manifest = ctx.usable();
+        manifest.assets.insert(
+            "images/hero.jpg".to_string(),
+            crate::manifest::digest_bytes(b"tampered"),
+        );
+        assert_eq!(
+            ctx.decide(&manifest).reason(),
+            Some(&RebuildReason::StaticChanged {
+                path: "images/hero.jpg".to_string(),
+            }),
+        );
+    }
+
+    /// Deterministic 160 × 90 PNG fixture, encoded in-test: no binary
+    /// blobs, identical bytes on every run.
+    fn fixture_png() -> Vec<u8> {
+        use image::ImageEncoder as _;
+        let mut image = image::RgbImage::new(160, 90);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            pixel.0 = [(x % 256) as u8, (y % 256) as u8, 128];
+        }
+        let mut bytes = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut bytes)
+            .write_image(image.as_raw(), 160, 90, image::ExtendedColorType::Rgb8)
+            .expect("fixture encodes");
+        bytes
+    }
+
+    /// Site with `[images]` configured and a real raster hero, kept alive
+    /// so decisions can digest against its files.
+    struct DerivCtx {
+        root: std::path::PathBuf,
+        out: std::path::PathBuf,
+        config: SignalConfig,
+        model: SiteModel,
+        renderer: signal_render::MiniJinjaRenderer,
+        specs: Vec<ArtifactSpec>,
+        _dir: tempfile::TempDir,
+        _out: tempfile::TempDir,
+    }
+
+    impl DerivCtx {
+        fn build() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let out = tempfile::tempdir().expect("tempdir");
+            write_site(
+                dir.path(),
+                &[
+                    (
+                        "signal.toml",
+                        "[site]\ntitle = \"Plan\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n[images]\nwidths = [80, 320]\nformat = \"webp\"\n",
+                    ),
+                    (
+                        "content/posts/hero.md",
+                        "---\ntitle: Hero\nimage: images/hero.png\n---\n\nBody ![alt](/images/hero.png).\n",
+                    ),
+                    (
+                        "content/posts/plain.md",
+                        "---\ntitle: Plain\n---\n\nNo images here.\n",
+                    ),
+                    (
+                        "templates/post.html",
+                        "<html><body>{{ content | safe }}</body></html>",
+                    ),
+                    (
+                        "templates/section.html",
+                        "<html><body>section</body></html>",
+                    ),
+                    ("static/images/logo.svg", "<svg></svg>"),
+                ],
+            );
+            // Real raster bytes: hero (referenced) plus an unreferenced
+            // file that must never sprout derivatives.
+            std::fs::write(dir.path().join("static/images/hero.png"), fixture_png())
+                .expect("hero writes");
+            std::fs::write(dir.path().join("static/images/unused.png"), fixture_png())
+                .expect("unused writes");
+            let out_dir = out.path().join("out");
+            let summary = crate::build::build_site_from_disk(dir.path(), &out_dir).expect("builds");
+            let text =
+                std::fs::read_to_string(dir.path().join("signal.toml")).expect("config text");
+            let config: SignalConfig = toml::from_str(&text).expect("config parses");
+            let (model, _) = crate::ingest::ingest_site(dir.path(), &config).expect("model");
+            let renderer = crate::build::load_templates(dir.path()).expect("renderer");
+            Self {
+                root: dir.path().to_path_buf(),
+                out: out_dir,
+                config,
+                model,
+                renderer,
+                specs: summary.specs,
+                _dir: dir,
+                _out: out,
+            }
+        }
+
+        fn usable(&self) -> Manifest {
+            match crate::manifest::load_previous(&self.out) {
+                PreviousManifest::Usable(manifest) => manifest,
+                other => panic!("expected usable manifest, got {other:?}"),
+            }
+        }
+
+        fn decide(&self, spec: &ArtifactSpec, manifest: &Manifest) -> BuildDecision {
+            decide_artifact(
+                spec,
+                &self.config,
+                &self.root,
+                &self.model,
+                &template_digests(&self.renderer).expect("digests"),
+                &config_digest(&self.config),
+                manifest,
+                &self.out,
+            )
+        }
+
+        fn spec(&self, path: &str) -> ArtifactSpec {
+            self.specs
+                .iter()
+                .find(|s| s.path == path)
+                .expect("spec planned")
+                .clone()
+        }
+    }
+
+    #[test]
+    fn derivatives_planned_for_referenced_raster_only() {
+        let ctx = DerivCtx::build();
+        let derived: Vec<&str> = ctx
+            .specs
+            .iter()
+            .filter(|s| s.kind == signal_core::ArtifactKind::DerivedImage)
+            .map(|s| s.path.as_str())
+            .collect();
+        assert_eq!(derived, vec!["images/hero-320.webp", "images/hero-80.webp"]);
+        // SVG stays a verbatim static; unreferenced rasters sprout nothing.
+        assert!(!derived.iter().any(|p| p.contains("logo")));
+        assert!(!derived.iter().any(|p| p.contains("unused")));
+    }
+
+    #[test]
+    fn page_names_derivative_inputs_for_its_hero() {
+        let ctx = DerivCtx::build();
+        let page = ctx.spec("posts/hero/index.html");
+        let inputs = artifact_inputs(&page, &ctx.config, &ctx.model).expect("inputs derive");
+        for width in [80, 320] {
+            assert!(
+                inputs.contains(&InputRef::DerivedImage {
+                    source: "images/hero.png".to_string(),
+                    width,
+                    format: "webp".to_string(),
+                }),
+                "page inputs must name the {width}w derivative: {inputs:?}"
+            );
+        }
+        // The imageless page names none.
+        let plain = ctx.spec("posts/plain/index.html");
+        let plain_inputs = artifact_inputs(&plain, &ctx.config, &ctx.model).expect("inputs derive");
+        assert!(
+            !plain_inputs
+                .iter()
+                .any(|i| matches!(i, InputRef::DerivedImage { .. })),
+            "imageless page must name no derivatives: {plain_inputs:?}"
+        );
+    }
+
+    #[test]
+    fn derivative_artifact_names_its_own_triple() {
+        let ctx = DerivCtx::build();
+        let deriv = ctx.spec("images/hero-80.webp");
+        assert_eq!(
+            artifact_inputs(&deriv, &ctx.config, &ctx.model).expect("inputs derive"),
+            vec![InputRef::DerivedImage {
+                source: "images/hero.png".to_string(),
+                width: 80,
+                format: "webp".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn unchanged_derivative_reuses() {
+        let ctx = DerivCtx::build();
+        let manifest = ctx.usable();
+        let deriv = ctx.spec("images/hero-80.webp");
+        assert!(ctx.decide(&deriv, &manifest).is_reuse());
+        let page = ctx.spec("posts/hero/index.html");
+        assert!(ctx.decide(&page, &manifest).is_reuse());
+    }
+
+    #[test]
+    fn tampered_source_rebuilds_derivative_and_page_with_derivative_reason() {
+        let ctx = DerivCtx::build();
+        let mut manifest = ctx.usable();
+        manifest.assets.insert(
+            "images/hero.png".to_string(),
+            crate::manifest::digest_bytes(b"tampered"),
+        );
+        let expected = Some(&RebuildReason::DerivativeChanged {
+            source: "images/hero.png".to_string(),
+        });
+        let deriv = ctx.spec("images/hero-80.webp");
+        assert_eq!(ctx.decide(&deriv, &manifest).reason(), expected);
+        // The page names the verbatim source too (A1 edge first), so it
+        // reports the static reason — both artifacts rebuild regardless.
+        let page = ctx.spec("posts/hero/index.html");
+        assert_eq!(
+            ctx.decide(&page, &manifest).reason(),
+            Some(&RebuildReason::StaticChanged {
+                path: "images/hero.png".to_string(),
+            }),
+        );
+        // The imageless page is unaffected by the tamper.
+        let plain = ctx.spec("posts/plain/index.html");
+        assert!(ctx.decide(&plain, &manifest).is_reuse());
+    }
+
+    #[test]
+    fn derivative_config_shape_is_validated() {
+        let gates = |toml: &str| {
+            let config: SignalConfig = toml::from_str(toml).expect("config parses");
+            crate::build::validate_config_gates(Path::new("/nonexistent"), &config)
+        };
+        // Both singular and plural formats are accepted (A4); unknown
+        // formats name the supported set.
+        assert!(
+            gates("[site]\ntitle = \"T\"\n[images]\nwidths = [640]\nformat = \"avif\"\n").is_ok()
+        );
+        assert!(gates(
+            "[site]\ntitle = \"T\"\n[images]\nwidths = [640]\nformats = [\"avif\", \"webp\"]\n"
+        )
+        .is_ok());
+        let err = gates("[site]\ntitle = \"T\"\n[images]\nwidths = [640]\nformat = \"jxl\"\n")
+            .expect_err("unknown format must be rejected");
+        assert!(err.to_string().contains("[images]"), "got: {err}");
+        let err = gates(
+            "[site]\ntitle = \"T\"\n[images]\nwidths = [640]\nformats = [\"webp\", \"jxl\"]\n",
+        )
+        .expect_err("unknown plural format must be rejected");
+        assert!(err.to_string().contains("[images]"), "got: {err}");
+        // `format` and `formats` together are ambiguous: fail clearly.
+        let err = gates("[site]\ntitle = \"T\"\n[images]\nwidths = [640]\nformat = \"webp\"\nformats = [\"avif\"]\n")
+            .expect_err("both format keys must be rejected");
+        assert!(err.to_string().contains("either"), "got: {err}");
+        // Zero widths are rejected, never skipped silently.
+        let err = gates("[site]\ntitle = \"T\"\n[images]\nwidths = [0, 640]\n")
+            .expect_err("zero width must be rejected");
+        assert!(err.to_string().contains("at least 1"), "got: {err}");
+        // Absent or empty requests plan nothing and pass.
+        assert!(gates("[site]\ntitle = \"T\"\n").is_ok());
+        assert!(gates("[site]\ntitle = \"T\"\n[images]\nwidths = []\n").is_ok());
     }
 }

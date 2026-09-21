@@ -146,10 +146,30 @@ Entry pages receive up to `limit` (default 3) related entries — the strongest 
 
 `static/` needs no configuration: every file beneath it is planned as a first-class artifact and copied verbatim to the same relative output path (`static/css/site.css` → `css/site.css`). Symlinks under `static/` are skipped. A static file that collides with a generated path fails validation before anything is written.
 
+## Images
+
+```toml
+[images]
+widths = [640, 1280, 1920]
+formats = ["avif", "webp"]
+```
+
+Opt-in. When `widths` is non-empty, every content-referenced PNG/JPEG source gains one `{stem}-{width}.{ext}` derivative per width per format: deterministically resized (aspect-preserving, never upscaled — requests at or above the source width emit source dimensions) and encoded (lossless WebP; AVIF at fixed settings). The singular `format = "webp"` remains valid for WebP-only sites; `formats`, when non-empty, wins over `format`, and setting both is an error. Editing a source rebuilds exactly its derivatives and the pages that embed them; removing a format prunes exactly its artifacts while the surviving format reuses; unchanged derivatives reuse byte-identically. SVG, GIF, and other assets are never rasterized. Absent (or empty `widths`) plans nothing. One planned format renders a responsive `<img>` (`srcset`, `sizes="100vw"`, intrinsic dimensions); several render `<picture>` with one `<source>` per format (AVIF first) and a WebP fallback `<img>`.
+
+## Social images
+
+```toml
+[social]
+width = 1200
+height = 630
+```
+
+Opt-in. When `[social]` is present, every entry page generates one deterministic PNG social image (a 1200 × 630 sharing card by default) at `social/<route-path>.png`, composed from the site title, the page title, its optional description and author, and its optional PNG/JPEG hero image (centred cover crop). The bundled font is compiled in, so social images are identical on every machine. Entry pages reference the social image from `og:image` and `twitter:image` (`twitter_card = summary_large_image`), and templates can read `social_image` for `url`, `absolute_url`, `width`, and `height`; the hero still supplies `json_ld` and `image_absolute_url`. Section roots and listing pages never get one, and a page opts out with front-matter `social_image: false`. Because Open Graph images must be publicly resolvable, `[social]` requires `site.base_url`; `enabled = false` keeps the table but plans nothing. Social images participate in incremental builds like every artifact: editing a title, description, hero, or dimension rebuilds the social image and its page; disabling the feature prunes them and restores hero-based metadata. See `docs/adr/0032-generated-social-images.md`.
+
 ## Validation
 
 ```sh
 signal check
 ```
 
-Signal rejects invalid dates, unsafe routes, conflicting output paths, and unsupported URL schemes rather than silently rewriting them. `signal check` evaluates the same validity conditions as `signal build` without writing anything; see [Reference validation](../validation/) and the [CLI reference](../cli/).
+Signal rejects invalid dates, unsafe routes, conflicting output paths, and unsupported URL schemes rather than silently rewriting them. `signal check` evaluates the same validity conditions as `signal build` without writing anything, and also reports advisory **diagnostics** over the publishing model — unreferenced raster assets, oversized sources, widths that clamp to the same output, and missing or empty image alt text (`warning` or `info`, never a build failure). See [Reference validation](../validation/) and the [CLI reference](../cli/).

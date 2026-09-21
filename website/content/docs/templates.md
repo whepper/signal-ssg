@@ -63,6 +63,7 @@ last_modified_formatted
 author
 image
 image_alt
+responsive_image
 content
 toc
 reading_time
@@ -78,6 +79,11 @@ og_description
 og_url
 og_type
 og_image
+twitter_card
+twitter_title
+twitter_description
+twitter_image
+social_image
 json_ld
 menus
 ```
@@ -87,12 +93,14 @@ Keys appear only when their inputs exist — metadata is omitted, never fabricat
 - `tags` lists taxonomy terms in authored front-matter order (first-occurrence deduplicated), which is what eyebrows and "first topic" picks render.
 - `extra` carries the entry's non-typed front matter verbatim (e.g. `extra.repo`, `extra.eyebrow`) and is absent when the entry defines none.
 - `related` carries up to `[related] limit` entry summaries (title, route, date, tags, image, reading time) sharing the most topics; it is absent when nothing overlaps.
+- `responsive_image` carries the front-matter hero expressed as planned derivatives: fallback fields (`src`, `srcset`, `sizes`, intrinsic `width`/`height`, `alt`, plus a `candidates` list of `{url, width, height}` rows) and a `sources` list of one `{format, mime, srcset, candidates}` group per planned format in `<source>` order (AVIF first), with `has_picture` true when several formats are planned. It is present only when `[images]` is configured and the hero is a referenced raster source; templates gate with `{% if responsive_image %}` and branch on `has_picture` to render `<picture>`. Like `image`, its URLs render template-escaped. Body images need no template support: single-format sources gain responsive `srcset`/`sizes`/dimensions on their `<img>` automatically, multi-format sources become `<picture>` with AVIF-first `<source>` elements and a WebP fallback.
 - `toc` carries the heading hierarchy with fragment ids; it is absent on pages without listable headings.
 - `has_mermaid` is present only on pages containing a Mermaid block, so diagram loaders load conditionally.
 - `content` is the rendered Markdown body; insert it with `{{ content | safe }}`.
 - `route` is the page's route in URL-path (encoded) form, safe to render into links directly.
 - `reading_time` is whole minutes derived from the word count.
 - `canonical_url` and the `og_*` keys appear when `base_url` (and the relevant inputs) exist; `json_ld` carries an `Article` object.
+- `social_image` appears on participating entry pages when `[social]` is configured: `og_image`/`twitter_image` carry the generated card's absolute URL (superseding the hero), `twitter_card` is `summary_large_image`, `twitter_title`/`twitter_description` mirror the Open Graph values, and `social_image` itself is `{ url, absolute_url, width, height }`. Absent on unconfigured sites and on pages that opt out with front-matter `social_image: false`, so it doubles as the gate: `{% if social_image %}`.
 
 ## Listing contexts
 

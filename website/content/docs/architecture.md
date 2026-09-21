@@ -72,7 +72,9 @@ Signal rejects unsafe route components and unsupported author URL schemes, detac
 
 ## Non-goals
 
-Signal deliberately does not attempt: plugins, remote content, image processing, a search UI, CMS integration, dynamic runtime behavior, redirects/aliases, pagination, a custom template language, a custom Markdown parser, a graph traversal engine, or async builds. Each would undermine determinism, auditability, reproducibility, explicit planning, or fail-closed behavior.
+Signal deliberately does not attempt: plugins, remote content, further image codecs beyond WebP/AVIF, image cropping or art direction, alternate social-card themes or dimensions, remote image services, a search UI, CMS integration, dynamic runtime behavior, redirects/aliases, pagination, a custom template language, a custom Markdown parser, a graph traversal engine, or async builds. Each would undermine determinism, auditability, reproducibility, explicit planning, or fail-closed behavior.
+
+Generated artifacts that stay inside that model are in scope: first-class assets, deterministic image derivatives (WebP and AVIF), responsive `srcset`/`<picture>` markup, and generated Open Graph/Twitter social images.
 
 ## Deeper design records
 

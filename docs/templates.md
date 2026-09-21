@@ -43,6 +43,7 @@ last_modified_formatted
 author
 image
 image_alt
+responsive_image
 content
 toc
 reading_time
@@ -56,6 +57,11 @@ og_description
 og_url
 og_type
 og_image
+twitter_card
+twitter_title
+twitter_description
+twitter_image
+social_image
 json_ld
 menus
 ```
@@ -70,7 +76,20 @@ non-typed front matter verbatim (e.g. `extra.repo`, `extra.toc`) and is
 absent when the entry defines none. `related` carries up to
 `[related] limit` entry summaries (title, route, date, tags, image, reading time)
 sharing the most topics; it is absent when nothing overlaps. `has_mermaid`
-gates client-side diagram loaders per page.
+gates client-side diagram loaders per page. `responsive_image` carries the
+front-matter hero expressed as planned derivatives (flat fallback fields
+plus per-format `sources` and a `has_picture` flag) on sites that
+configure `[images]`; body images need no template support, since Comrak
+`<img>` tags gain `srcset`/`sizes`/dimensions automatically.
+
+When the site configures `[social]`, participating entry pages receive a
+generated social image: `og_image` and `twitter_image` carry its absolute URL
+(superseding the hero), `twitter_card` is `summary_large_image`,
+`twitter_title`/`twitter_description` mirror the Open Graph values, and
+`social_image` is an object with `url` (URL-path form), `absolute_url`,
+`width`, and `height`. All of these are absent on unconfigured sites and
+on pages that opt out (`social_image: false`), so the keys double as the
+gate: `{% if social_image %}`.
 
 Listing pages receive entry summaries rather than the complete site model.
 Summaries carry the same display fields everywhere (title, description,

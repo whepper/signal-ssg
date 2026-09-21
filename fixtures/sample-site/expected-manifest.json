@@ -2,9 +2,9 @@
   "schema_version": 1,
   "generation": {
     "engine_version": "1.0.0",
-    "behavior_version": 8
+    "behavior_version": 13
   },
-  "config_digest": "95567887e1440b6bd95737486b07193f3e1a556d73d45f1b4ebc331c42431187",
+  "config_digest": "f67c04cc22dc68d282c9c9bf6da16f459bdb0875380d4ea7a73b08acdc888796",
   "templates": {
     "404.html": "bbb88ecd4076e6a9ea3e34cee537880f4235da2ee02302833041a40563e09491",
     "home.html": "cf11d4211bdca142163811238a1cb87a314ee44ffe720c0caf1aacc8cdac38ad",
@@ -40,6 +40,10 @@
     "tagged:Rust": "dc775c3ad4cf1978cd80791f494a6124e20f2d731c33b42f6d90ead7143d1476",
     "tagged:Systems": "395bae7b74a370e684284d5b04da281fd7c46c03c16e03246d9b056f0b12fd8a",
     "topic_terms": "eb3b7f5d414d14ee38be5d77e485f81f1a899459fb2546a2e4d5a05f853e6012"
+  },
+  "assets": {
+    "images/alpha.svg": "5f0a153ef3a422f751ef8d345d3623f76cd63cecd7c83d51a9f0fd919f2454bc",
+    "js/mermaid-stub.js": "418521c8d17e87e4c506e6b52b3fc959721fbbb0ac2f597d1185eb7d7825f04d"
   },
   "artifacts": {
     "404.html": {
@@ -155,7 +159,12 @@
           }
         },
         "TemplateSet",
-        "Config"
+        "Config",
+        {
+          "Static": {
+            "path": "images/alpha.svg"
+          }
+        }
       ],
       "output_digest": "5dc3f498c0e10a6ba95377b5a0eebbc93ef7980438e5cae07413af6010d1a4b7"
     },

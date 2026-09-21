@@ -86,6 +86,8 @@ Signal renders a deterministic Markdown subset:
 
 Internal links, images, and front-matter images are validated against what the build will actually generate; a broken internal reference fails the build before anything is written. See [Reference validation](../validation/).
 
+When `[images]` is configured, body images for raster sources render responsive markup and heroes gain a `responsive_image` template value. When `[social]` is configured, each entry page also gains a generated social image (a sharing card) referenced from `og:image` and `twitter:image`; a page opts out with front-matter `social_image: false`. See [Configuration](../configuration/).
+
 ## URLs
 
 Relative destinations and `http(s)` are allowed. Executable or unsupported schemes such as `javascript:`, `data:`, and `vbscript:` are rejected.

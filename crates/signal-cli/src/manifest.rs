@@ -70,8 +70,27 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 /// hero `image`/`image_alt` to entry summaries (home heroes, cards, and
 /// every listing/term/related projection that embeds them); `8` adds
 /// opt-in HTML minification (`[output] minify_html`), a post-render output
-/// step that changes HTML bytes when enabled.
-pub const GENERATION_BEHAVIOR_VERSION: u32 = 8;
+/// step that changes HTML bytes when enabled; `9` adds first-class asset
+/// edges (A1): page artifacts name their entry's referenced source assets
+/// as `Static` inputs, so asset-byte changes invalidate embedding pages;
+/// `10` adds generated image derivatives (A2): `DerivedImage` artifacts
+/// and derivative inputs on embedding pages, plus the `[images]`
+/// configuration they derive from; `11` adds responsive image rendering
+/// (A3): body `<img>` tags and the `responsive_image` hero context embed
+/// planned derivatives as `srcset`/`sizes`/dimensions on configured
+/// sites (unconfigured output is byte-identical, but rendering semantics
+/// changed, so the gate rebuilds once); `12` adds the AVIF derivative
+/// format and `<picture>` rendering (A4): the `[images]` format set
+/// (`format`/`formats`) joins derivative identity, and multi-format plans
+/// render `<source>` groups with a WebP-preferring fallback (single-format
+/// output is unchanged in shape, but encoder identity and rendering
+/// semantics changed, so the gate rebuilds once); `13` adds generated
+/// social cards (A5): `[social]` joins the configuration digest, entry
+/// pages on enabled sites gain an `og:image`/`twitter:*` card reference,
+/// and `SocialImage` artifacts carry the generator's identity (font,
+/// layout, encoder). Disabled sites produce byte-identical output but the
+/// config shape changed, so the gate rebuilds once.
+pub const GENERATION_BEHAVIOR_VERSION: u32 = 13;
 
 /// Identity of the code that produced a manifest.
 ///
@@ -187,6 +206,22 @@ pub enum InputRef {
         /// Source path, e.g. `images/alpha.svg`.
         path: String,
     },
+    /// A generated image derivative (A2, ADR 0029), keyed by its full
+    /// transformation identity.
+    ///
+    /// The byte comparison reuses the manifest `assets` source-digest map
+    /// (raw form, then percent-decoded form): parameters are part of the
+    /// reference itself, so parameter changes surface as `InputsChanged`
+    /// while source-byte changes surface as `DerivativeChanged`. A
+    /// derivative is never compared against page HTML — the A1 lesson.
+    DerivedImage {
+        /// Source path relative to `static/`, e.g. `images/hero.jpg`.
+        source: String,
+        /// Requested output width in pixels.
+        width: u32,
+        /// Output format name, e.g. `"webp"`.
+        format: String,
+    },
 }
 
 /// One built artifact's record: what it is, what went in, what came out.
@@ -226,6 +261,15 @@ pub struct Manifest {
     pub entries: BTreeMap<String, Digest>,
     /// Every consumed projection by query key.
     pub queries: BTreeMap<String, Digest>,
+    /// Every source asset by `static/`-relative path: the digest of its
+    /// source bytes (which equals its `Static` artifact's output digest,
+    /// verbatim passthrough). `Static` inputs compare against this map,
+    /// and so do generated-artifact inputs that consume a source's bytes
+    /// (`DerivedImage{source}` and a social image's composited hero) —
+    /// always raw-then-decoded, mirroring validation — never against a
+    /// referencing artifact's own output digest.
+    #[serde(default)]
+    pub assets: BTreeMap<String, Digest>,
     /// Every planned artifact by output path.
     pub artifacts: BTreeMap<String, ArtifactRecord>,
 }
@@ -674,6 +718,22 @@ pub(crate) fn digest_query(
     })
 }
 
+/// Look up a source-asset digest: raw form first, then the
+/// percent-decoded form — the precedence `link_check` validates with —
+/// so authored encoded references match their on-disk records.
+pub(crate) fn asset_digest<'a>(
+    assets: &'a BTreeMap<String, Digest>,
+    path: &str,
+) -> Option<&'a Digest> {
+    if let Some(digest) = assets.get(path) {
+        return Some(digest);
+    }
+    match signal_core::percent_decode(path) {
+        Some(decoded) if decoded != path => assets.get(&decoded),
+        _ => None,
+    }
+}
+
 /// Canonical digest of the whole configuration (coarse by design).
 pub(crate) fn config_digest(config: &SignalConfig) -> Digest {
     digest_json(config)
@@ -768,6 +828,18 @@ pub fn build_manifest(
     for entry in model.entries() {
         entries.insert(entry.route.0.clone(), entry_digest(entry));
     }
+    // Source-asset digests for the `Static` inputs pages and sections
+    // name: the output digest of a `Static` artifact IS its source digest
+    // (verbatim passthrough), so no source re-read is needed.
+    let mut assets = BTreeMap::new();
+    for spec in specs {
+        if spec.kind == ArtifactKind::Static {
+            let digest = outputs.get(&spec.path).ok_or_else(|| BuildError::Model {
+                message: format!("no output digest for planned artifact {:?}", spec.path),
+            })?;
+            assets.insert(spec.path.clone(), digest.clone());
+        }
+    }
 
     Ok(Manifest {
         schema_version: MANIFEST_SCHEMA_VERSION,
@@ -776,6 +848,7 @@ pub fn build_manifest(
         templates: template_digests(renderer)?,
         entries,
         queries,
+        assets,
         artifacts: records,
     })
 }
@@ -1236,6 +1309,7 @@ mod tests {
             templates: BTreeMap::new(),
             entries: BTreeMap::new(),
             queries: BTreeMap::new(),
+            assets: BTreeMap::new(),
             artifacts: BTreeMap::from([
                 (
                     "keep/index.html".to_string(),
@@ -1306,6 +1380,7 @@ mod tests {
             templates: BTreeMap::new(),
             entries: BTreeMap::new(),
             queries: BTreeMap::new(),
+            assets: BTreeMap::new(),
             artifacts: BTreeMap::new(),
         };
         assert!(generation_compatible(&base));
