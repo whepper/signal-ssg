@@ -131,8 +131,6 @@ target/release/signal build --root my-site --out my-site/dist
 
 Signal reports planned, reused, rebuilt, and pruned artifacts. The output is just static files — any static file server can serve the generated directory. How Signal decides what to rebuild is explained in [Incremental builds](../builds/).
 
-The output is just static files. Any static file server can serve the generated directory.
-
 To preview incremental decisions without writing anything:
 
 ```sh

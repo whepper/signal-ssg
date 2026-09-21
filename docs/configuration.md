@@ -82,6 +82,21 @@ crawler, plus a `Sitemap:` reference whenever `site.base_url` is configured
 and the sitemap therefore exists. Per-agent or disallow rules are not
 implemented; a real requirement would extend this table.
 
+## Sitemap
+
+The sitemap needs no configuration beyond `site.base_url`: when a base URL
+exists, `sitemap.xml` is generated from the explicit public route inventory
+(entries, sections, home, taxonomy). Drafts, feeds, and static assets never
+enter the inventory.
+
+## Search index
+
+The search index needs no configuration: `index.json` is always generated
+from normalized plain-text projections (title, description, tags, date,
+route, plain text) under a versioned schema. Signal owns extraction,
+structural normalization, and serialization; tokenization, ranking,
+filtering, and the search UI remain outside the engine.
+
 ## Images
 
 ```toml
@@ -204,6 +219,14 @@ Entry pages receive up to `limit` (default 3) related entries — the
 strongest shared-topic overlaps, newest-first within equal overlap. The
 projection is always available to entry templates as `related`; this table
 only tunes the cap.
+
+## Static assets
+
+`static/` needs no configuration: every file beneath it is planned as a
+first-class artifact and copied verbatim to the same relative output path
+(`static/css/site.css` → `css/site.css`). Symlinks under `static/` are
+skipped. A static file that collides with a generated path fails validation
+before anything is written.
 
 ## Validation
 

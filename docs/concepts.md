@@ -32,7 +32,12 @@ Generators plan lightweight artifact specifications. Later stages resolve and wr
 
 Artifacts can be pages, section indexes, taxonomy pages, RSS feeds (main,
 section, taxonomy-label index, and per-term), a sitemap, a robots file, a
-search index, a themed not-found page, or static files.
+search index, a themed not-found page, static files, generated image
+derivatives, or generated social images.
+
+Related entries and image diagnostics are projections, not artifacts:
+they are computed from the model for entry pages and the read-only
+commands and never become files.
 
 ## Assets
 

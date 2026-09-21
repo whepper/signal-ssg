@@ -19,13 +19,17 @@ See [Content](../content/) and [Templates](../templates/).
 
 Canonical URLs, OpenGraph metadata, and JSON-LD are generated when the required inputs exist. Missing metadata is omitted rather than fabricated.
 
+## Related entries
+
+Entry pages can expose related entries: the strongest shared-topic overlaps, capped by `[related] limit` (default 3), newest-first within equal overlap. The projection is a pure function of the normalized model, so a page rebuilds when any entry it lists changes. See [Templates](../templates/).
+
 ## Feeds, sitemap, and robots
 
 Signal generates a family of RSS feeds from normalized site data: the main feed, one feed per collection (section), the taxonomy label-index feed, and one feed per term. It also generates a sitemap from the route inventory and, when `[robots]` is set, a deterministic allow-all `robots.txt`. See [Configuration](../configuration/).
 
 ## Search
 
-Signal generates a versioned static `index.json` containing searchable plain-text projections. Signal owns extraction, structural normalization, and serialization only: tokenization, ranking, filtering, and the search UI remain outside the engine. The index is a pure projection of the normalized model, so it rebuilds only when searchable content changes — template, configuration, asset, and fenced-code edits reuse it. `signal explain index.json` reports the artifact's kind, declared query input, document count, and reuse/rebuild decision.
+Signal generates a versioned static `index.json` containing searchable plain-text projections. Signal owns extraction, structural normalization, and serialization only: tokenization, ranking, filtering, and the search UI remain outside the engine. The index is a pure projection of the normalized model, so it rebuilds only when searchable content changes — template, configuration, asset, and fenced-code edits reuse it. `signal explain index.json` reports the artifact's kind, declared query input, document count, and reuse/rebuild decision. See [Search](../search/) for the schema and how to query it.
 
 ## Markdown
 
@@ -58,6 +62,10 @@ Internal links, images, front-matter images, and menu targets are validated agai
 ## Diagnostics
 
 `signal check` and `signal explain <asset>` report evidence-based diagnostics over the publishing model: unreferenced raster assets, sources far larger than the largest representation Signal generates from them, configured widths that clamp to the same output, and missing or empty image alternative text. Diagnostics are advisory (`warning` or `info`, never a build failure), state measured facts rather than advice, and come from one shared analysis, so `check` and `explain` always agree. They are not artifacts: nothing is written, pruned, or recorded in the manifest. See [Reference validation](../validation/) and the [CLI reference](../cli/).
+
+## HTML output
+
+Template-rendered pages can be minified with `[output] minify_html = true` (off by default): deterministic, HTML-aware whitespace reduction that preserves `pre`/`code` contents, Mermaid sources, `textarea`, inline scripts and styles, JSON-LD, entities, attributes, and comments. Feeds, sitemap, search index, robots.txt, and static files are never minified. See [Configuration](../configuration/).
 
 ## Security
 

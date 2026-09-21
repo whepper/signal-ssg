@@ -114,6 +114,14 @@ signal build --root my-site --out dist --explain
 artifacts would be reused, which would be rebuilt and why, and which
 stale outputs would be pruned.
 
+`signal explain` is the same read-only view focused on one target:
+`signal explain --root my-site images/hero.jpg` reports an asset's source,
+referrers, generated derivatives, and reuse decision, and
+`signal explain --root my-site index.json` describes the search index.
+`signal check` and `signal explain` also report advisory image and asset
+diagnostics — unreferenced assets, oversized sources, widths that clamp to
+the same output, and missing or empty alt text — which never fail a build.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
@@ -123,10 +131,12 @@ stale outputs would be pruned.
 - [Templates](docs/templates.md)
 - [Features](docs/features.md)
 - [Deployment](docs/deployment.md)
+- [Roadmap](docs/roadmap.md)
 - [Release notes](docs/releases/)
 - [Architecture](../ARCHITECTURE.md)
 - [Architecture Decision Records](docs/adr/)
 - [Hugo migration notes](docs/migration/)
+- [Website](https://whepper.github.io/signal-ssg/) — the project site, itself built with Signal
 
 ## Current status
 

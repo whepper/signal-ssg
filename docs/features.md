@@ -78,6 +78,15 @@ They are not artifacts: nothing is written, pruned, or recorded in the
 manifest. Byte-level "derivative larger than its source" is deliberately
 not reported, because `check` has no generated output to measure.
 
+## Validation
+
+Internal Markdown links and images, front-matter images, and internal menu
+targets are validated against the planned output before anything is
+written; a broken reference fails the build with the output tree and
+manifest untouched. `signal check` runs the same validation without
+building, and external URLs are never fetched. Reference-style links,
+template-literal URLs, and author raw HTML are deliberately out of scope.
+
 ## HTML output
 
 Template-rendered pages can be minified with `[output] minify_html = true`

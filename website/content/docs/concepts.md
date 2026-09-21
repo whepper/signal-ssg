@@ -42,7 +42,9 @@ Signal ingests and validates source material, then freezes an immutable site mod
 
 Generators plan lightweight artifact specifications — output path plus kind, not rendered bytes. Later stages resolve and write them.
 
-Artifacts can be pages, section indexes, the home page, taxonomy pages, RSS feeds (main, section, taxonomy-label index, and per-term), a sitemap, a robots file, a search index, a themed not-found page, or static files. Every output file corresponds to exactly one specification; static assets are first-class artifacts too, so collisions between generated and static paths fail validation before anything is written.
+Artifacts can be pages, section indexes, the home page, taxonomy pages, RSS feeds (main, section, taxonomy-label index, and per-term), a sitemap, a robots file, a search index, a themed not-found page, static files, generated image derivatives, or generated social images. Every output file corresponds to exactly one specification; static assets are first-class artifacts too, so collisions between generated and static paths fail validation before anything is written.
+
+Not everything is an artifact. Related entries are computed from the model and rendered into entry pages, and image diagnostics are computed for the read-only commands; neither ever becomes a file. See [Search](../search/) and [Templates](../templates/).
 
 ## Validation before output
 
