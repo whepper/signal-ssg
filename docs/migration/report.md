@@ -63,7 +63,9 @@ newest-first across collections.
 
 ## Standing gaps (tracked in `hugo.md`)
 
-Search, code/diagram/alert components, menus, image processing.
+Search, code/diagram/alert components, menus, image processing. Image
+processing was added later through the A2–A5 image pipeline work; this
+list records the historical gap set at that point.
 
 ---
 

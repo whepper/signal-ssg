@@ -24,7 +24,7 @@ Feature | Used? | Signal support (slice 1) | Migration strategy | Status
 | `draft` | yes (convention) | skipped at ingest | native | done |
 | `slug` override | fixture only | slug override, else filename stem verbatim | native | done |
 | `_index.md` branch bundles | yes (section content pages) | section-root routing in ingest | native | done |
-| `featured` / `image`+`image_alt` | yes | `featured` drives home hero; `image` normalized to site-root URLs, unsafe schemes rejected at ingest; no image processing | native | done |
+| `featured` / `image`+`image_alt` | yes | `featured` drives home hero; `image` normalized to site-root URLs, unsafe schemes rejected at ingest; optional `[images]` derivatives and responsive markup are available for raster sources | native | done |
 | `toc` / heading IDs + anchors | yes | deterministic anchors (`signal-markdown::anchor_base`: Unicode-lowercase; keep alphanumerics, `-`, `_`; each whitespace run → one `-`; all other punctuation dropped with no separator emitted; leading/trailing `-` trimmed; empty → `"section"`; repeats gain `-1`, `-2`, …) + `Toc` projection from normalized headings; H1 excluded, H2–H6 nested; no config. Engine difference vs Hugo: punctuation-adjacent runs collapse, e.g. Hugo `v041--v042` vs Signal `v041-v042` (BR-1); fragment links are consistent within each engine | native | done |
 | `math` (KaTeX, self-hosted, gated) | no live page | captured in `extra` | slice 8, gated asset loading | gap |
 | `author` / `lastmod` | yes | typed `author` / `last_modified` (entry override → site default → omitted); JSON-LD `dateModified` | native | done |
@@ -50,7 +50,7 @@ Feature | Used? | Signal support (slice 1) | Migration strategy | Status
 | Search (`index.json` + FlexSearch) | yes | versioned static `index.json` from normalized data (regular entries, route-ordered); no engine or UI in Signal — client integration is external | native | done |
 | CSS pipeline (concat/minify/fingerprint+SRI) | yes | `static/` verbatim passthrough | slice 7: fingerprinting, if warranted | gap |
 | Static passthrough (`static/` → root) | yes | verbatim copy in `build_site` | native | done |
-| Image processing (`resources.*`) | no (CSS-only `resources.Get`) | none | only if content requires it | deferred |
+| Image processing (`resources.*`) | no (CSS-only `resources.Get`) | optional `[images]` derivatives and `[social]` cards are available but are not used by this site | no migration required; revisit if content requires it | not-used |
 | Aliases / redirects | no | none | only if content requires them | deferred |
 | Pagination | no (`first N` limits only) | none | only if content requires it | deferred |
 | i18n / `enableGitInfo` / HTML minify | config-only | none | per-feature decision later | deferred |
