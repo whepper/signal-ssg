@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Signal
+        run: cargo build --release --locked --package signal-cli --bin signal
+
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -eu
+          mkdir staging
+          cp target/release/signal staging/signal
+          cp LICENSE README.md staging/
+          tar -czf "signal-${GITHUB_REF_NAME}-${TARGET}.tar.gz" -C staging .
+
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory staging | Out-Null
+          Copy-Item target/release/signal.exe staging/signal.exe
+          Copy-Item LICENSE,README.md staging/
+          Compress-Archive -Path staging/* -DestinationPath "signal-${env:GITHUB_REF_NAME}-${env:TARGET}.zip"
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-${{ matrix.target }}
+          path: signal-${{ github.ref_name }}-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: signal-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate checksums
+        run: |
+          (cd dist && sha256sum * > SHA256SUMS)
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Signal ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*

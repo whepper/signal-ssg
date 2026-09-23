@@ -16,6 +16,21 @@ The resulting binary is:
 target/release/signal
 ```
 
+### Release binaries
+
+Push a tag such as `v1.0.0` to publish prebuilt binaries to the repository's
+[GitHub Releases page](https://github.com/whepper/signal-ssg/releases). The
+release workflow provides archives for:
+
+- Linux: `x86_64-unknown-linux-gnu`
+- macOS: `x86_64-apple-darwin`
+- Windows: `x86_64-pc-windows-msvc`
+
+Each archive includes the `signal` executable, `LICENSE`, and `README.md`. The
+release also includes a `SHA256SUMS` file for checksum verification. To use a
+release archive, download it, extract it, and place the resulting executable
+somewhere on your `PATH`.
+
 ## Create a site
 
 Create:
