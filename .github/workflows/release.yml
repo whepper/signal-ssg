@@ -29,6 +29,8 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
           - os: macos-26-intel
             target: x86_64-apple-darwin
           - os: macos-26
@@ -47,8 +49,33 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Rust target
+        shell: bash
+        run: rustup target add "$TARGET"
+
+      - name: Install musl toolchain
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y musl-tools
+          echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+
       - name: Build Signal
-        run: cargo build --release --locked --package signal-cli --bin signal
+        shell: bash
+        run: cargo build --release --locked --package signal-cli --bin signal --target "$TARGET"
+
+      - name: Verify static musl binary
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        shell: bash
+        run: |
+          set -eu
+          binary="target/${TARGET}/release/signal"
+          file "$binary"
+          file "$binary" | grep -q "statically linked"
+          ! readelf -d "$binary" 2>&1 | grep -q "NEEDED"
+          ! strings "$binary" | grep -q "GLIBC_"
 
       - name: Package Unix binary
         if: runner.os != 'Windows'
@@ -56,9 +83,11 @@ jobs:
         run: |
           set -eu
           mkdir staging
-          cp target/release/signal staging/signal
+          cp "target/${TARGET}/release/signal" staging/signal
           cp LICENSE README.md staging/
-          tar -czf "signal-${RELEASE_TAG}-${TARGET}.tar.gz" -C staging .
+          archive="signal-${RELEASE_TAG}-${TARGET}.tar.gz"
+          tar -czf "$archive" -C staging .
+          tar -tzf "$archive" | grep -qx './signal'
 
       - name: Package Windows binary
         if: runner.os == 'Windows'
@@ -66,7 +95,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory staging | Out-Null
-          Copy-Item target/release/signal.exe staging/signal.exe
+          Copy-Item "target/$env:TARGET/release/signal.exe" staging/signal.exe
           Copy-Item LICENSE,README.md staging/
           Compress-Archive -Path staging/* -DestinationPath "signal-${env:RELEASE_TAG}-${env:TARGET}.zip"
 

@@ -22,7 +22,8 @@ Push a tag such as `v1.0.0` to publish prebuilt binaries to the repository's
 [GitHub Releases page](https://github.com/whepper/signal-ssg/releases). The
 release workflow provides archives for:
 
-- Linux: `x86_64-unknown-linux-gnu`
+- Linux glibc: `x86_64-unknown-linux-gnu`
+- Linux static/musl: `x86_64-unknown-linux-musl` (for Cloudflare Pages and older Ubuntu environments)
 - macOS Intel: `x86_64-apple-darwin`
 - macOS Apple Silicon: `aarch64-apple-darwin`
 - Windows: `x86_64-pc-windows-msvc`
