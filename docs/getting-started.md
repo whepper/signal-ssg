@@ -23,7 +23,8 @@ Push a tag such as `v1.0.0` to publish prebuilt binaries to the repository's
 release workflow provides archives for:
 
 - Linux: `x86_64-unknown-linux-gnu`
-- macOS: `x86_64-apple-darwin`
+- macOS Intel: `x86_64-apple-darwin`
+- macOS Apple Silicon: `aarch64-apple-darwin`
 - Windows: `x86_64-pc-windows-msvc`
 
 Each archive includes the `signal` executable, `LICENSE`, and `README.md`. The
