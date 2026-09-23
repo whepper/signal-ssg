@@ -1,9 +1,9 @@
 ---
 title: Features
-description: What Signal 1.0 can do, and what it deliberately does not.
+description: What Signal 1.1 can do, and what it deliberately does not.
 ---
 
-Signal 1.0 includes the core pieces needed for a content-oriented static site. Each item below links to its guide.
+Signal 1.1 includes the core pieces needed for a content-oriented static site. Each item below links to its guide.
 
 ## Pages
 

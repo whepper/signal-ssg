@@ -28,7 +28,7 @@ target/release/signal --version
 ```
 
 ```text
-signal 1.0.0
+signal 1.1.0
 ```
 
 ## Create a site

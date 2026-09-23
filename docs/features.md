@@ -1,6 +1,6 @@
 # Features
 
-Signal 1.0 includes the core pieces needed for a content-oriented static site.
+Signal 1.1 includes the core pieces needed for a content-oriented static site.
 
 ## Pages
 
