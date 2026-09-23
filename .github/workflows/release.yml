@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag to package and publish
+        required: true
+        default: v1.0.0
+        type: string
 
 permissions:
   contents: read
@@ -28,9 +35,12 @@ jobs:
             target: x86_64-pc-windows-msvc
     env:
       TARGET: ${{ matrix.target }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref_name }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -46,7 +56,7 @@ jobs:
           mkdir staging
           cp target/release/signal staging/signal
           cp LICENSE README.md staging/
-          tar -czf "signal-${GITHUB_REF_NAME}-${TARGET}.tar.gz" -C staging .
+          tar -czf "signal-${RELEASE_TAG}-${TARGET}.tar.gz" -C staging .
 
       - name: Package Windows binary
         if: runner.os == 'Windows'
@@ -56,13 +66,13 @@ jobs:
           New-Item -ItemType Directory staging | Out-Null
           Copy-Item target/release/signal.exe staging/signal.exe
           Copy-Item LICENSE,README.md staging/
-          Compress-Archive -Path staging/* -DestinationPath "signal-${env:GITHUB_REF_NAME}-${env:TARGET}.zip"
+          Compress-Archive -Path staging/* -DestinationPath "signal-${env:RELEASE_TAG}-${env:TARGET}.zip"
 
       - name: Upload release archive
         uses: actions/upload-artifact@v4
         with:
           name: signal-${{ matrix.target }}
-          path: signal-${{ github.ref_name }}-${{ matrix.target }}.*
+          path: signal-${{ inputs.release_tag || github.ref_name }}-${{ matrix.target }}.*
           if-no-files-found: error
 
   release:
@@ -86,7 +96,8 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: Signal ${{ github.ref_name }}
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          name: Signal ${{ inputs.release_tag || github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
