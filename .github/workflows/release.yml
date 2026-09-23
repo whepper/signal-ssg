@@ -73,7 +73,7 @@ jobs:
           set -eu
           binary="target/${TARGET}/release/signal"
           file "$binary"
-          file "$binary" | grep -q "statically linked"
+          file "$binary" | grep -Eq 'static(-pie)? linked|statically linked'
           ! readelf -d "$binary" 2>&1 | grep -q "NEEDED"
           ! strings "$binary" | grep -q "GLIBC_"
 
@@ -87,7 +87,7 @@ jobs:
           cp LICENSE README.md staging/
           archive="signal-${RELEASE_TAG}-${TARGET}.tar.gz"
           tar -czf "$archive" -C staging .
-          tar -tzf "$archive" | grep -qx './signal'
+          tar -tzf "$archive" | grep -Fx './signal' >/dev/null
 
       - name: Package Windows binary
         if: runner.os == 'Windows'
