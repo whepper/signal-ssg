@@ -6,7 +6,7 @@
 //! all against runtime-generated raster fixtures (no binary blobs).
 
 use image::ImageEncoder as _;
-use signal_cli::build::build_site_from_disk;
+use signal_cli::{build::build_site_from_disk, manifest::InputRef};
 use std::path::{Path, PathBuf};
 
 fn write_site(dir: &Path, files: &[(&str, &str)]) {
@@ -59,6 +59,32 @@ fn gradient_webp(width: u32, height: u32) -> Vec<u8> {
     bytes
 }
 
+const HOME_TEMPLATE: &str = concat!(
+    "{% if featured %}{% if featured.responsive_image %}",
+    "{% if featured.responsive_image.has_picture %}<picture>",
+    "{% for source in featured.responsive_image.sources %}",
+    "<source type=\"{{ source.mime }}\" srcset=\"{{ source.srcset }}\" />",
+    "{% endfor %}",
+    "<img src=\"{{ featured.responsive_image.src }}\"",
+    " srcset=\"{{ featured.responsive_image.srcset }}\"",
+    " sizes=\"{{ featured.responsive_image.sizes }}\"",
+    " width=\"{{ featured.responsive_image.width }}\"",
+    " height=\"{{ featured.responsive_image.height }}\"",
+    " alt=\"{{ featured.responsive_image.alt }}\" />",
+    "</picture>",
+    "{% else %}",
+    "<img src=\"{{ featured.responsive_image.src }}\"",
+    " srcset=\"{{ featured.responsive_image.srcset }}\"",
+    " sizes=\"{{ featured.responsive_image.sizes }}\"",
+    " width=\"{{ featured.responsive_image.width }}\"",
+    " height=\"{{ featured.responsive_image.height }}\"",
+    " alt=\"{{ featured.responsive_image.alt }}\" />",
+    "{% endif %}",
+    "{% elif featured.image %}",
+    "<img src=\"{{ featured.image }}\" alt=\"{{ featured.image_alt | default('') }}\" />",
+    "{% endif %}{% endif %}",
+);
+
 const POST_TEMPLATE: &str = concat!(
     "<html><body>",
     "{% if responsive_image %}",
@@ -101,6 +127,34 @@ fn site_with_hero(dir: &Path, config_extra: &str, body: &str) {
         ],
     );
     write_bytes(dir, "static/images/hero.png", &gradient_png(160, 90));
+}
+
+fn home_site_with_hero(dir: &Path, config_extra: &str, image_front_matter: &str) {
+    write_site(
+        dir,
+        &[
+            (
+                "signal.toml",
+                &format!(
+                    "[site]\ntitle = \"Responsive home\"\nhome_collection = \"posts\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n{config_extra}"
+                ),
+            ),
+            (
+                "content/posts/example.md",
+                &format!(
+                    "---\ntitle: Example\ndate: 2026-01-01\nfeatured: true\n{image_front_matter}---\n\nBody text.\n"
+                ),
+            ),
+            ("templates/post.html", "<html><body>{{ content | safe }}</body></html>"),
+            ("templates/section.html", "<html><body>section</body></html>"),
+            ("templates/home.html", HOME_TEMPLATE),
+        ],
+    );
+    write_bytes(dir, "static/images/hero.png", &gradient_png(160, 90));
+}
+
+fn decode_template_slashes(html: &str) -> String {
+    html.replace("&#x2f;", "/").replace("&#47;", "/")
 }
 
 fn out_dir(dir: &Path) -> PathBuf {
@@ -633,4 +687,327 @@ fn explain_multi_format_derivative_shows_both_groups() {
         text.contains("Responsive:\n  fallback: /images/hero-320.webp\n  sizes: 100vw\n  avif:\n    /images/hero-80.avif 80w\n    /images/hero-320.avif 160w\n  webp:\n    /images/hero-80.webp 80w\n    /images/hero-320.webp 160w\n"),
         "got:\n{text}"
     );
+}
+
+#[test]
+fn homepage_featured_hero_renders_picture_avif_first_without_alt() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    home_site_with_hero(dir.path(), IMAGES_BOTH, "image: images/hero.png\n");
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+
+    let html = decode_template_slashes(
+        &std::fs::read_to_string(out.join("index.html")).expect("homepage"),
+    );
+    assert!(
+        html.contains(
+            "<picture><source type=\"image/avif\" srcset=\"/images/hero-80.avif 80w, /images/hero-320.avif 160w\" /><source type=\"image/webp\" srcset=\"/images/hero-80.webp 80w, /images/hero-320.webp 160w\" /><img src=\"/images/hero-320.webp\" srcset=\"/images/hero-80.webp 80w, /images/hero-320.webp 160w\" sizes=\"100vw\" width=\"160\" height=\"90\" alt=\"\" /></picture>"
+        ),
+        "got:\n{html}"
+    );
+
+    let manifest = signal_cli::manifest::parse_manifest(
+        &std::fs::read_to_string(out.join(".signal/manifest.json")).expect("manifest"),
+    )
+    .expect("manifest parses");
+    let inputs = &manifest.artifacts["index.html"].inputs;
+    assert!(inputs.contains(&InputRef::Entry {
+        route: "/posts/example/".to_string()
+    }));
+    assert!(inputs.contains(&InputRef::Static {
+        path: "images/hero.png".to_string()
+    }));
+    for format in ["avif", "webp"] {
+        assert!(inputs.contains(&InputRef::DerivedImage {
+            source: "images/hero.png".to_string(),
+            width: 80,
+            format: format.to_string(),
+        }));
+        assert!(inputs.contains(&InputRef::DerivedImage {
+            source: "images/hero.png".to_string(),
+            width: 320,
+            format: format.to_string(),
+        }));
+    }
+}
+
+#[test]
+fn homepage_featured_hero_single_format_is_responsive_img_with_clamped_widths() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    home_site_with_hero(
+        dir.path(),
+        IMAGES_CONFIG,
+        "image: images/hero.png\nimage_alt: Homepage hero\n",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("builds");
+
+    let html = decode_template_slashes(
+        &std::fs::read_to_string(out.join("index.html")).expect("homepage"),
+    );
+    assert!(
+        html.contains(
+            "<img src=\"/images/hero-320.webp\" srcset=\"/images/hero-80.webp 80w, /images/hero-320.webp 160w\" sizes=\"100vw\" width=\"160\" height=\"90\" alt=\"Homepage hero\" />"
+        ),
+        "got:\n{html}"
+    );
+    assert!(!html.contains("<picture>"), "got:\n{html}");
+}
+
+#[test]
+fn homepage_featured_hero_falls_back_to_plain_image_when_pipeline_is_unavailable() {
+    for (name, config, front_matter, extra_file, expected) in [
+        (
+            "disabled",
+            "",
+            "image: images/hero.png\nimage_alt: Plain hero\n",
+            None,
+            "<img src=\"/images/hero.png\" alt=\"Plain hero\" />",
+        ),
+        (
+            "external",
+            IMAGES_CONFIG,
+            "image: https://cdn.example.com/hero.png\nimage_alt: Remote hero\n",
+            None,
+            "<img src=\"https://cdn.example.com/hero.png\" alt=\"Remote hero\" />",
+        ),
+        (
+            "non-raster",
+            IMAGES_CONFIG,
+            "image: images/logo.svg\nimage_alt: Logo\n",
+            Some(("static/images/logo.svg", "<svg></svg>\n")),
+            "<img src=\"/images/logo.svg\" alt=\"Logo\" />",
+        ),
+    ] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        home_site_with_hero(dir.path(), config, front_matter);
+        if let Some((path, contents)) = extra_file {
+            write_site(dir.path(), &[(path, contents)]);
+        }
+        let out = out_dir(dir.path());
+        let summary = build_site_from_disk(dir.path(), &out).expect("builds");
+        assert_eq!(summary.derived_images, 0, "{name} must not derive");
+        let html = decode_template_slashes(
+            &std::fs::read_to_string(out.join("index.html")).expect("homepage"),
+        );
+        assert!(html.contains(expected), "{name}: got:\n{html}");
+        assert!(
+            !html.contains("srcset") && !html.contains("<picture>"),
+            "{name}: got:\n{html}"
+        );
+    }
+}
+
+#[test]
+fn homepage_without_featured_entry_exposes_no_hero_or_derivatives() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    home_site_with_hero(dir.path(), IMAGES_CONFIG, "image: images/hero.png\n");
+    write_site(
+        dir.path(),
+        &[(
+            "content/posts/example.md",
+            "---\ntitle: Example\ndate: 2026-01-01\n---\n\nNot featured.\n",
+        )],
+    );
+    let out = out_dir(dir.path());
+    let summary = build_site_from_disk(dir.path(), &out).expect("builds");
+    assert_eq!(summary.derived_images, 0);
+    let html = decode_template_slashes(
+        &std::fs::read_to_string(out.join("index.html")).expect("homepage"),
+    );
+    assert!(html.is_empty(), "got:\n{html}");
+
+    let manifest = signal_cli::manifest::parse_manifest(
+        &std::fs::read_to_string(out.join(".signal/manifest.json")).expect("manifest"),
+    )
+    .expect("manifest parses");
+    assert!(!manifest.artifacts["index.html"]
+        .inputs
+        .iter()
+        .any(|input| matches!(
+            input,
+            InputRef::Entry { .. } | InputRef::Static { .. } | InputRef::DerivedImage { .. }
+        )));
+}
+
+#[test]
+fn homepage_hero_source_change_rebuilds_derivatives_and_home_then_fully_reuses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let one_format = "[images]\nwidths = [80]\nformat = \"webp\"\n";
+    home_site_with_hero(
+        dir.path(),
+        one_format,
+        "image: images/hero.png\nimage_alt: Hero\n",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("first builds");
+
+    let explain = signal_cli::explain::explain_asset_from_disk(dir.path(), &out, "index.html")
+        .expect("homepage explains");
+    assert!(explain.contains("  DerivedImage(images/hero.png, 80w, webp)\n"));
+    assert!(explain.contains("Decision:\n  reuse\n"), "got:\n{explain}");
+
+    write_bytes(dir.path(), "static/images/hero.png", &gradient_png(120, 60));
+    let plan = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    for path in [
+        "  images/hero.png\n",
+        "  images/hero-80.webp\n",
+        "  index.html\n",
+    ] {
+        assert!(
+            plan.split("Rebuild:\n")
+                .nth(1)
+                .expect("rebuilds")
+                .contains(path),
+            "missing {path:?}: got:\n{plan}"
+        );
+    }
+    build_site_from_disk(dir.path(), &out).expect("rebuilds");
+
+    let unchanged = build_site_from_disk(dir.path(), &out).expect("no-op builds");
+    assert_eq!(unchanged.rebuilt, 0, "got: {unchanged:?}");
+    assert!(unchanged.reused > 0);
+    let plan = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    assert!(plan.contains("rebuild:   0\n"), "got:\n{plan}");
+    let html = decode_template_slashes(
+        &std::fs::read_to_string(out.join("index.html")).expect("homepage"),
+    );
+    assert!(html.contains("width=\"80\" height=\"40\""), "got:\n{html}");
+}
+
+#[test]
+fn removing_homepage_avif_prunes_only_avif_and_changes_picture_to_img() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let one_format = "[images]\nwidths = [80]\nformat = \"webp\"\n";
+    home_site_with_hero(
+        dir.path(),
+        "[images]\nwidths = [80]\nformats = [\"avif\", \"webp\"]\n",
+        "image: images/hero.png\nimage_alt: Hero\n",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("first builds");
+    assert!(out.join("images/hero-80.avif").exists());
+
+    home_site_with_hero(
+        dir.path(),
+        one_format,
+        "image: images/hero.png\nimage_alt: Hero\n",
+    );
+    let plan = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    let reuse = plan.split("Reuse:\n").nth(1).expect("reuse section");
+    assert!(reuse.contains("  images/hero-80.webp\n"), "got:\n{plan}");
+    assert!(
+        plan.contains("Prune:\n  images/hero-80.avif\n"),
+        "got:\n{plan}"
+    );
+    assert!(
+        plan.contains("  index.html\n    reason: inputs changed\n"),
+        "got:\n{plan}"
+    );
+
+    let summary = build_site_from_disk(dir.path(), &out).expect("rebuilds");
+    assert_eq!(
+        summary.pruned_paths,
+        vec!["images/hero-80.avif".to_string()]
+    );
+    assert!(!out.join("images/hero-80.avif").exists());
+    assert!(out.join("images/hero-80.webp").exists());
+    let html = decode_template_slashes(
+        &std::fs::read_to_string(out.join("index.html")).expect("homepage"),
+    );
+    assert!(
+        !html.contains("<picture>") && !html.contains("avif"),
+        "got:\n{html}"
+    );
+    assert!(
+        html.contains("src=\"/images/hero-80.webp\""),
+        "got:\n{html}"
+    );
+}
+
+#[test]
+fn homepage_switches_responsive_hero_when_featured_selection_changes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    home_site_with_hero(
+        dir.path(),
+        IMAGES_CONFIG,
+        "image: images/hero.png\nimage_alt: First hero\n",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("first builds");
+
+    write_site(
+        dir.path(),
+        &[(
+            "content/posts/newer.md",
+            "---\ntitle: Newer\ndate: 2026-02-01\nfeatured: true\nimage: images/newer.png\nimage_alt: Newer hero\n---\n\nNewer body.\n",
+        )],
+    );
+    write_bytes(
+        dir.path(),
+        "static/images/newer.png",
+        &gradient_png(200, 100),
+    );
+    let plan = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    assert!(
+        plan.contains("  index.html\n    reason: inputs changed\n"),
+        "got:\n{plan}"
+    );
+    assert!(
+        plan.contains("  images/newer-80.webp\n    reason: manifest record missing\n"),
+        "got:\n{plan}"
+    );
+    build_site_from_disk(dir.path(), &out).expect("switch builds");
+
+    let html = decode_template_slashes(
+        &std::fs::read_to_string(out.join("index.html")).expect("homepage"),
+    );
+    assert!(
+        html.contains("src=\"/images/newer-320.webp\""),
+        "got:\n{html}"
+    );
+    assert!(html.contains("alt=\"Newer hero\""), "got:\n{html}");
+    assert!(
+        !html.contains("src=\"/images/hero-320.webp\""),
+        "got:\n{html}"
+    );
+}
+
+#[test]
+fn removing_featured_image_removes_responsive_homepage_markup() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    home_site_with_hero(
+        dir.path(),
+        IMAGES_CONFIG,
+        "image: images/hero.png\nimage_alt: Hero\n",
+    );
+    let out = out_dir(dir.path());
+    build_site_from_disk(dir.path(), &out).expect("first builds");
+
+    write_site(
+        dir.path(),
+        &[(
+            "content/posts/example.md",
+            "---\ntitle: Example\ndate: 2026-01-01\nfeatured: true\n---\n\nNo hero.\n",
+        )],
+    );
+    let summary = build_site_from_disk(dir.path(), &out).expect("rebuilds");
+    assert!(summary
+        .pruned_paths
+        .contains(&"images/hero-80.webp".to_string()));
+    assert!(summary
+        .pruned_paths
+        .contains(&"images/hero-320.webp".to_string()));
+    let html = decode_template_slashes(
+        &std::fs::read_to_string(out.join("index.html")).expect("homepage"),
+    );
+    assert!(html.is_empty(), "got:\n{html}");
+    let manifest = signal_cli::manifest::parse_manifest(
+        &std::fs::read_to_string(out.join(".signal/manifest.json")).expect("manifest"),
+    )
+    .expect("manifest parses");
+    assert!(!manifest.artifacts["index.html"]
+        .inputs
+        .iter()
+        .any(|input| matches!(input, InputRef::DerivedImage { .. })));
 }

@@ -801,8 +801,26 @@ fn insert_menus(
     }
 }
 
+/// The homepage's featured projection.
+///
+/// `EntrySummary` remains the shared listing shape, while the homepage adds
+/// resolved responsive-hero metadata only for the entry selected by
+/// [`Home::featured_id`]. Keeping the extension in this CLI-facing value
+/// avoids adding filesystem-derived image data to every listing summary.
+#[derive(serde::Serialize)]
+struct HomeFeatured {
+    #[serde(flatten)]
+    summary: EntrySummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    responsive_image: Option<crate::responsive::ResponsiveHero>,
+}
+
 /// Rendering context for the home page: hero plus recent summaries from the
 /// configured home collection. Never the model itself.
+///
+/// The featured summary retains `featured.image`/`featured.image_alt`; when
+/// its selected full entry (`Home::featured_id`) has derivable responsive
+/// metadata, the same object also carries `featured.responsive_image`.
 ///
 /// No `title` key is set: the base template falls back to the bare site
 /// title, mirroring Hugo's `IsHome` title branch.
@@ -821,8 +839,22 @@ fn home_context(
     if let Some(url) = base_url {
         ctx.insert("base_url", url);
     }
-    if let Some(featured) = home.featured(model, date_format) {
-        ctx.insert("featured", &featured);
+    if let Some(entry) = home.featured_id(model).and_then(|id| model.get(id)) {
+        let summary =
+            EntrySummary::of(entry, date_format).expect("Home::featured_id excludes section roots");
+        let responsive_image = match entry.image.as_deref() {
+            Some(image) => {
+                crate::responsive::responsive_hero(root, config, image, entry.image_alt.as_deref())?
+            }
+            None => None,
+        };
+        ctx.insert(
+            "featured",
+            &HomeFeatured {
+                summary,
+                responsive_image,
+            },
+        );
     }
     ctx.insert("recent", home.recent(model, date_format));
     page_metadata(

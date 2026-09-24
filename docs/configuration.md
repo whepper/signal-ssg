@@ -116,8 +116,9 @@ supported derivative output formats are WebP and AVIF. The legacy singular
 `format = "webp"` remains valid for one format;
 `formats`, when non-empty, wins over `format`, and setting both is an
 error. Unknown formats fail; duplicates are deduplicated; author order
-never affects output. Embedding pages depend on these derivatives, so
-editing a source rebuilds exactly its derivatives and embedders;
+never affects output. Embedding pages and responsive homepage heroes
+depend on these derivatives, so editing a source rebuilds exactly its
+derivatives and consumers;
 removing a format prunes exactly its artifacts while the surviving
 format reuses. Unchanged derivatives reuse byte-identically across
 builds. SVG, GIF, and other assets are never rasterized and stay
@@ -126,10 +127,14 @@ leaves output byte-identical. Rendered pages embed the derivatives as
 responsive markup: one planned format renders a responsive `<img>`
 (`srcset` of actual widths, `sizes="100vw"`, intrinsic dimensions);
 several render `<picture>` with one `<source type=…>` per format
-(AVIF first) and a WebP fallback `<img>`. Heroes are exposed to
-templates as `responsive_image`; `signal explain <asset> --width W
-[--format F]` describes each derivative's format-grouped responsive
-representation.
+(AVIF first) and a WebP fallback `<img>`. Entry-page heroes are exposed to
+templates as `responsive_image`. The homepage exposes the same resolved value
+as `featured.responsive_image`, but only for the actual entry selected by the
+featured-hero rule; `featured.image`/`featured.image_alt` remain the fallback
+when the hero is absent, external, non-raster, or the image pipeline is off.
+`signal explain <asset> --width W [--format F]` describes each derivative's
+format-grouped responsive representation, and `signal explain index.html`
+lists the selected hero source and every derivative consumed by the homepage.
 
 ## Social images
 

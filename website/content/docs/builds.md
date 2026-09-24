@@ -23,7 +23,7 @@ Invalidation is deliberately coarse in two places, both sound by construction:
 - **Templates:** any change to the loaded template set invalidates every template-rendered artifact. There is no per-page include-closure tracking.
 - **Configuration:** the configuration digest is whole-config; any setting change invalidates configuration-consuming artifacts.
 
-Static assets are precise: one changed file invalidates exactly that file. Generated artifacts are precise by identity too: an image derivative is `(source, width, format)` and a social image is its page plus composited hero, so one changed source rebuilds exactly its derivatives and the pages that embed them — never unrelated pages. The whole-configuration input stays coarse, so any configuration change still invalidates every configuration-consuming artifact, generated families included.
+Static assets are precise: one changed file invalidates exactly that file. Generated artifacts are precise by identity too: an image derivative is `(source, width, format)` and a social image is its page plus composited hero, so one changed source rebuilds exactly its derivatives and the pages that embed them — never unrelated pages. When the homepage exposes a responsive featured image, `index.html` names the selected entry, its hero source, and every derivative in that image representation; unrelated listing summaries remain query-only. The whole-configuration input stays coarse, so any configuration change still invalidates every configuration-consuming artifact, generated families included.
 
 ## Behavior versions
 
@@ -44,8 +44,9 @@ The rule:
 | 12 | A4: the AVIF derivative format and `<picture>` rendering |
 | 13 | A5: `[social]` configuration and generated Open Graph/Twitter social images |
 | 14 | WebP is accepted as an image derivative source; affected configured sites gain the existing derivatives and responsive markup |
+| 15 | The homepage exposes the selected featured entry's resolved responsive image and declares its consumed source and derivative inputs |
 
-Versions 9–14 also carry each family's **generator identity**: the derivative encoders (lossless WebP, AVIF at fixed quality/speed), the responsive selection rules, and the social-image font, layout, and PNG encoder. That is why generated artifacts need no per-artifact encoder version — the behavior gate *is* their reuse identity, and changing a generator or source-planning semantics bumps it.
+Versions 9–15 also carry each family's **generator identity**: the derivative encoders (lossless WebP, AVIF at fixed quality/speed), the responsive selection rules, and the social-image font, layout, and PNG encoder. That is why generated artifacts need no per-artifact encoder version — the behavior gate *is* their reuse identity, and changing a generator or source-planning semantics bumps it.
 
 The behavior version is separate from `MANIFEST_SCHEMA_VERSION`: the schema says whether the metadata can be read, the behavior version says whether previously generated artifacts are semantically eligible for reuse.
 

@@ -94,8 +94,12 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 /// plan derivatives and consume responsive markup through the existing
 /// pipeline. Existing PNG/JPEG and disabled-site output is unchanged, but the
 /// additional artifacts and page bytes require a one-time compatibility
-/// rebuild for affected sites.
-pub const GENERATION_BEHAVIOR_VERSION: u32 = 14;
+/// rebuild for affected sites; `15` exposes resolved responsive metadata on
+/// the actual homepage featured entry and declares its consumed source and
+/// derivative inputs. Homepages without a derivable featured hero keep their
+/// existing context shape and output, while the behavior and dependency gate
+/// advances once for compatibility.
+pub const GENERATION_BEHAVIOR_VERSION: u32 = 15;
 
 /// Identity of the code that produced a manifest.
 ///

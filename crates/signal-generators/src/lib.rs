@@ -279,14 +279,25 @@ impl Home {
         &self.collection
     }
 
-    /// Newest-dated featured entry, if any.
-    pub fn featured(&self, model: &SiteModel, date_format: &str) -> Option<EntrySummary> {
+    /// Identity of the newest-dated featured entry, if any.
+    ///
+    /// Exposing the selected [`ContentId`](signal_core::ContentId) lets
+    /// downstream rendering look up the full model entry and resolve
+    /// metadata that deliberately does not belong in every summary, while
+    /// [`Self::featured`] continues to provide the shared listing projection.
+    pub fn featured_id(&self, model: &SiteModel) -> Option<signal_core::ContentId> {
         model
             .entries_in_collection_by_date(&self.collection)
             .iter()
-            .filter(|entry| entry.featured && !entry.section_root)
-            .filter_map(|entry| EntrySummary::of(entry, date_format))
-            .next()
+            .find(|entry| entry.featured && !entry.section_root)
+            .map(|entry| entry.id)
+    }
+
+    /// Newest-dated featured entry as the shared listing summary.
+    pub fn featured(&self, model: &SiteModel, date_format: &str) -> Option<EntrySummary> {
+        self.featured_id(model)
+            .and_then(|id| model.get(id))
+            .and_then(|entry| EntrySummary::of(entry, date_format))
     }
 
     /// Recent listing members, capped at `recent_limit`.

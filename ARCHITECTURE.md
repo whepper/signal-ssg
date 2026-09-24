@@ -152,8 +152,9 @@ section-root body) additionally names the source assets its entry references
 as `InputRef::Static` (A1 asset edges, ADR 0028); the reuse predicate compares
 those against the manifest's source-asset digests, so editing an asset
 rebuilds exactly its embedders. Generated image derivatives (A2, ADR 0029)
-extend the same shape one level down: each `DerivedImage` artifact and each
-embedding page names `InputRef::DerivedImage{source,width,format}` —
+extend the same shape one level down: each `DerivedImage` artifact, each
+embedding page, and a homepage exposing its selected featured hero names
+`InputRef::DerivedImage{source,width,format}` —
 parameters ride the reference (parameter changes are `InputsChanged`),
 byte comparison reuses the source-asset map (source changes are
 `DerivativeChanged`), and no derivative is ever compared against page
@@ -249,7 +250,9 @@ single planned format, or become `<picture>` with one AVIF-first
 several, while every other tag passes through byte-identical; entry
 heroes additionally gain a `responsive_image` context value (flat
 fallback fields plus per-format `sources` and a `has_picture` flag) for
-templates that opt in. On `[social]`-enabled sites, participating entry
+templates that opt in. The homepage's actual featured entry receives the
+same resolved value as `featured.responsive_image`; other listing
+summaries do not. On `[social]`-enabled sites, participating entry
 pages additionally gain a generated Open Graph/Twitter card reference
 (A5, ADR 0032): `og_image`/`twitter_image` point at the page's
 `social/<route-path>.png` card (superseding the hero), `twitter_card`
@@ -281,7 +284,10 @@ per collection), `Home` (featured hero plus recent list), `TopicsIndex` /
 `SectionFeeds` / `TaxonomyFeeds` (RSS from normalized data: main, one per
 collection, and the taxonomy label index plus one per term), `Sitemap`,
 `Robots` (a fixed allow-all policy referencing the sitemap), and `Search`
-(versioned JSON index from normalized plain text) are implemented. The
+(versioned JSON index from normalized plain text) are implemented. `Home`
+projects the newest featured entry as the usual summary and extends only
+that value with responsive metadata resolved from the selected full entry;
+its artifact declares those hero source and derivative inputs. The
 themed not-found page (`404.html`) is planned directly from
 `site.not_found_template` (it consumes no content). RSS beyond these
 families (e.g. author feeds) remains a future projection behind the
@@ -595,8 +601,9 @@ Boundaries, unchanged from A1's shape:
   manifest's `assets` map; nothing digests another artifact's output. The
   dependency graph is therefore depth ≤ 2 and **cannot contain a cycle**,
   and reuse needs no traversal.
-- **Rendering decides only how.** Body rewriting and hero contexts consume
-  the plan's derivative views (via the shared `responsive_image` selector);
+- **Rendering decides only how.** Body rewriting, entry hero contexts, and
+  the homepage's selected featured-hero context consume the plan's
+  derivative views (via the shared `responsive_image` selector);
   the social generator never renders HTML and the renderer never plans.
   The one deliberate filesystem read in the rendering path is dimension
   *measurement* for `srcset`/`width`/`height` (`signal-cli::images`

@@ -410,6 +410,35 @@ pub fn entry_derivatives(
     Ok(out)
 }
 
+/// Every derivative one entry's front-matter hero requests, in deterministic
+/// output-path order.
+///
+/// External, absent, and non-raster heroes request nothing. This is the
+/// homepage dependency counterpart to [`crate::responsive::responsive_hero`]:
+/// its selected featured entry names only the source and derivatives whose
+/// generated paths can appear in `featured.responsive_image`.
+pub fn hero_derivatives(
+    config: &SignalConfig,
+    entry: &signal_core::ContentEntry,
+) -> Result<Vec<DerivativeSpec>, BuildError> {
+    let Some(image) = entry.image.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let Some(source) = signal_core::resolve_front_matter_image(image) else {
+        return Ok(Vec::new());
+    };
+    if !signal_core::is_derivable_source(&source) {
+        return Ok(Vec::new());
+    }
+    // Reuse the page/section derivative enumeration rather than defining a
+    // second homepage planning loop. A summary carries only the hero, so
+    // retain exactly that source from the full entry's planned derivatives.
+    Ok(entry_derivatives(config, entry)?
+        .into_iter()
+        .filter(|deriv| deriv.source == source)
+        .collect())
+}
+
 /// Select one source's responsive representation (A3, ADR 0030):
 /// decode once, build actual-dimension views, run the shared pure
 /// selector.

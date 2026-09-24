@@ -82,6 +82,55 @@ plus per-format `sources` and a `has_picture` flag) on sites that
 configure `[images]`; body images need no template support, since Comrak
 `<img>` tags gain `srcset`/`sizes`/dimensions automatically.
 
+### Homepage featured image
+
+When `home_collection` selects a featured entry, the homepage's existing
+`featured` summary may also carry `featured.responsive_image`. It has the same
+shape as an entry page's `responsive_image`, but is resolved only for the full
+entry actually selected as the featured hero. It is absent when there is no
+featured entry, the hero is external or non-raster, or `[images]` is disabled.
+`featured.image` and `featured.image_alt` remain available as the plain-image
+fallback:
+
+```html
+{% if featured %}
+  {% if featured.responsive_image %}
+    {% if featured.responsive_image.has_picture %}
+      <picture>
+        {% for source in featured.responsive_image.sources %}
+          <source type="{{ source.mime }}" srcset="{{ source.srcset }}">
+        {% endfor %}
+        <img
+          src="{{ featured.responsive_image.src }}"
+          srcset="{{ featured.responsive_image.srcset }}"
+          sizes="{{ featured.responsive_image.sizes }}"
+          width="{{ featured.responsive_image.width }}"
+          height="{{ featured.responsive_image.height }}"
+          alt="{{ featured.responsive_image.alt }}"
+        >
+      </picture>
+    {% else %}
+      <img
+        src="{{ featured.responsive_image.src }}"
+        srcset="{{ featured.responsive_image.srcset }}"
+        sizes="{{ featured.responsive_image.sizes }}"
+        width="{{ featured.responsive_image.width }}"
+        height="{{ featured.responsive_image.height }}"
+        alt="{{ featured.responsive_image.alt }}"
+      >
+    {% endif %}
+  {% elif featured.image %}
+    <img src="{{ featured.image }}" alt="{{ featured.image_alt | default('') }}">
+  {% endif %}
+{% endif %}
+```
+
+With multiple configured formats, `sources` is AVIF-first and
+`has_picture` is true. With one format it is false, so the template can render
+the fallback fields directly as a responsive `<img>`. Missing `image_alt`
+becomes an empty `responsive_image.alt`; the plain fallback uses the same
+`default('')` rule.
+
 When the site configures `[social]`, participating entry pages receive a
 generated social image: `og_image` and `twitter_image` carry its absolute URL
 (superseding the hero), `twitter_card` is `summary_large_image`,
@@ -95,7 +144,9 @@ Listing pages receive entry summaries rather than the complete site model.
 Summaries carry the same display fields everywhere (title, description,
 date, route, tags in authored order, hero `image`/`image_alt` in URL-path
 form, reading time): heroes, cards, and listings all render from one
-projection.
+projection. Only the homepage's `featured` object adds
+`responsive_image`; section, taxonomy, feed, recent-list, and related
+summaries do not.
 
 ## Date formatting
 

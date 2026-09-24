@@ -64,9 +64,14 @@ shared with manifest recording — could not know which widths survived.
   untouched (template compatibility); a new `responsive_image` key
   carries `{ src, srcset, sizes, width, height, alt, candidates }` when
   the hero has planned derivatives, absent otherwise (templates gate
-  with `{% if responsive_image %}`). Listings (Home/Taxonomy/related
-  summaries) render no responsive markup, so their query-only coverage
-  stays accurate — dependencies reflect actual byte consumption.
+  with `{% if responsive_image %}`). The homepage extends only its
+  selected featured summary with `featured.responsive_image`, resolved
+  from that full entry through the same `responsive_hero` path. Its
+  `Home` artifact then names the selected entry, hero source, and hero
+  derivatives that can appear in the rendered representation. Other
+  listing, feed, related, and taxonomy summaries render no responsive
+  metadata and keep query-only coverage, so dependencies reflect actual
+  byte consumption.
 - **No `<picture>` in A3**: with only WebP derivatives, a responsive
   `<img>` is sufficient; introducing `<picture>` now would be ceremony
   for one format. The `candidates` list on the hero context is the
@@ -79,6 +84,19 @@ markup) — the textbook behavior-version case, so
 `GENERATION_BEHAVIOR_VERSION 11` (one gated rebuild; unconfigured sites
 rebuild once with byte-identical output). Derivative artifacts reuse
 uninterrupted across the upgrade.
+
+### Implementation correction: responsive homepage featured heroes
+
+The original A3 rule intentionally left every listing query-only. A later
+compatibility exercise showed that the one listing image Signal actually
+projects as a full hero is the homepage's selected featured entry. The
+homepage therefore extends that one `featured` object with the existing
+`ResponsiveHero` value and declares the exact source/derivative inputs it
+renders. This is a correction to the placement rule, not a second image
+pipeline: entry and homepage heroes both call `responsive_hero`, share the
+same format ordering, fallback selection, dimensions, and alt behavior, and
+omit the key for external, non-raster, unconfigured, and absent heroes.
+Behavior version `15` covers the new context shape and dependency semantics.
 
 ### Validation and explanation
 

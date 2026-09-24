@@ -38,7 +38,7 @@
 //! |----------------|---------------------------|------------------------------|
 //! | `Page` | `Entry{route}` + `Query{related:{route}}` + `TemplateSet` + `Config` + `Static{…}` per referenced asset + `DerivedImage{…}` per requested derivative | entry lookup + `entry_context` (incl. related) + selected template + config |
 //! | `CollectionIndex` | `Query{summaries:{coll}}` (+ `Entry{route}` + its asset `Static{…}` + its `DerivedImage{…}` when a section-root entry exists) + `TemplateSet` + `Config` | `section_context` (summaries + optional section-root entry) + selected template + config |
-//! | `Home` | `Query{home:{coll}}` + `TemplateSet` + `Config` | `home_context` (featured + recent) + selected template + config |
+//! | `Home` | `Query{home:{coll}}` + `TemplateSet` + `Config` (+ selected featured `Entry`, hero `Static`, and hero `DerivedImage` inputs when responsive metadata is exposed) | `home_context` (featured + recent) + selected template + config |
 //! | `Taxonomy` (index) | `Query{topic_terms}` + `TemplateSet` + `Config` | `topic_terms` + index template + config |
 //! | `Taxonomy` (term) | `Query{tagged:{label}}` + `TemplateSet` + `Config` | `topic_terms` term lookup + term template + config |
 //! | `Rss` | `Query{feed:*}` (via shared `feed_identity`) + `Config` | `resolve_feed` via the same `feed_identity` + config |
@@ -56,13 +56,16 @@
 //! that embed it, which is what makes the future A2 graph (`hero.jpg` →
 //! derivatives → pages embedding `srcset`/dimensions) a pure extension:
 //! derivatives will appear as further inputs/outputs on the same edges.
-//! Listings (`CollectionIndex` without a section root, `Home`, `Taxonomy`)
-//! keep their query-only coverage in A1: their summaries carry the image
-//! *reference string* (already inside the query digest), and no A1 bytes
-//! embed asset dimensions. A section page that renders a section-root
-//! entry's body names that entry's assets, like a page does. Derivative
-//! edges (A2, `docs/adr/0029`) follow the same shape one level down:
-//! pages and section pages name `DerivedImage{source,width,format}` for
+//! Listings keep their query-only coverage when they render only summary
+//! reference strings (`CollectionIndex` without a section root, `Taxonomy`,
+//! and home's recent list). The homepage is the one listing context that
+//! derives responsive metadata from the full featured entry, so `Home`
+//! additionally names that selected entry, hero source, and hero derivatives
+//! when it can emit `featured.responsive_image`. A section page that renders
+//! a section-root entry's body names that entry's assets, like a page does.
+//! Derivative edges (A2, `docs/adr/0029`) follow the same shape one level
+//! down: pages, section pages, and responsive homepage heroes name
+//! `DerivedImage{source,width,format}` for
 //! every derivative their references request, and each `DerivedImage`
 //! artifact names its own triple. Parameters ride the reference, so
 //! parameter changes are `InputsChanged`; byte comparison reuses the
@@ -101,7 +104,7 @@ use crate::errors::BuildError;
 use crate::manifest::{
     collection_for_section_route, config_digest, digest_bytes, digest_json, digest_query,
     entry_digest, feed_identity, query_key, taxonomy_root, template_digests, Digest, FeedIdentity,
-    InputRef, Manifest, PreviousManifest,
+    InputRef, Manifest, PreviousManifest, HOME_RECENT_LIMIT,
 };
 
 /// Why one artifact must be rebuilt.
@@ -396,13 +399,40 @@ pub(crate) fn artifact_inputs(
                     .ok_or_else(|| BuildError::Model {
                         message: "home artifact without home configuration".to_string(),
                     })?;
-            Ok(vec![
+            let mut inputs = vec![
                 InputRef::Query {
                     key: query_key::home(&collection),
                 },
                 InputRef::TemplateSet,
                 InputRef::Config,
-            ])
+            ];
+            // The homepage exposes responsive metadata only for the full
+            // entry actually selected by `Home::featured_id`. When that
+            // hero is derivable, rendering measures its source and references
+            // the planned derivatives, so the page names both alongside the
+            // entry whose full model supplied the metadata. Other summaries
+            // and listing artifacts remain query-only.
+            let home = signal_generators::Home::new(
+                signal_core::CollectionId::new(collection),
+                HOME_RECENT_LIMIT,
+            );
+            if let Some(featured) = home.featured_id(model).and_then(|id| model.get(id)) {
+                let derivatives = crate::images::hero_derivatives(config, featured)?;
+                if let Some(hero) = derivatives.first() {
+                    inputs.push(InputRef::Entry {
+                        route: featured.route.0.clone(),
+                    });
+                    inputs.push(InputRef::Static {
+                        path: hero.source.clone(),
+                    });
+                    inputs.extend(derivatives.into_iter().map(|deriv| InputRef::DerivedImage {
+                        source: deriv.source,
+                        width: deriv.width,
+                        format: deriv.format.to_string(),
+                    }));
+                }
+            }
+            Ok(inputs)
         }
         ArtifactKind::Taxonomy => {
             let route = spec.route.as_ref().ok_or_else(|| BuildError::Model {
