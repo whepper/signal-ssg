@@ -212,7 +212,8 @@ pub struct RobotsConfig {}
 /// ```
 ///
 /// — one `{stem}-{width}.{ext}` artifact per content-referenced raster
-/// source (PNG/JPEG) per width per format. The legacy singular `format =
+/// source (PNG, JPEG/JPG, or WebP) per width per format. The legacy singular
+/// `format =
 /// "webp"` remains valid and means exactly one format; `formats`, when
 /// non-empty, wins over `format`, and setting both is a configuration
 /// error (ambiguous intent fails clearly rather than guessing). An empty

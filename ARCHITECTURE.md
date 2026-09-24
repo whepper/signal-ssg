@@ -510,7 +510,7 @@ and entry heading ids. It runs after `validated_plan()` and before any
 write/prune/manifest step, so a broken reference fails closed like invalid
 content; `signal check` runs the same validation without building.
 Image derivative sources (A2, ADR 0029) are probed in the same position —
-existence plus PNG/JPEG decodability, on both the build and check paths —
+existence plus PNG/JPEG/WebP decodability, on both the build and check paths —
 so malformed sources fail identically everywhere before any write.
 Composited social-card hero sources (A5, ADR 0032) are probed there too,
 by the same read-then-decode rule.

@@ -52,7 +52,7 @@ Source assets (files under `static/`), asset references (authored
 strings), generated assets (derived outputs such as resized images),
 and output assets (planned specs plus bytes) are distinct concepts.
 
-With `[images]` configured, content-referenced PNG/JPEG sources
+With `[images]` configured, content-referenced PNG/JPEG/WebP sources
 additionally gain generated derivatives (`hero-640.webp`,
 `hero-640.avif`, …): deterministically resized, never upscaled, tracked
 as `DerivedImage` build inputs on both the derivative artifacts and the

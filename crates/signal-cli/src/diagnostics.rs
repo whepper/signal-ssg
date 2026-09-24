@@ -79,7 +79,7 @@ pub enum Diagnostic {
     /// A raster source asset that no content entry references.
     ///
     /// Condition: a planned `ArtifactKind::Static` spec whose path is a
-    /// derivable raster source (`png`/`jpg`/`jpeg`) and which no entry
+    /// derivable raster source (`png`/`jpg`/`jpeg`/`webp`) and which no entry
     /// references. Non-raster assets (CSS, JS, SVG, favicons) are *not*
     /// reported: they are commonly referenced from templates, which the
     /// model does not track, so reporting them would be a false positive.
