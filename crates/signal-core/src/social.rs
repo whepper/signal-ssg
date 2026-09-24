@@ -119,15 +119,20 @@ pub fn social_image_eligible(config: &SignalConfig, entry: &ContentEntry) -> boo
 
 /// The hero source a social card will composite, if any.
 ///
-/// Only raster sources the image pipeline already understands are
-/// composited (PNG/JPEG, the `is_derivable_source` set). External heroes,
-/// SVG/GIF heroes, and unset heroes yield a metadata-only card — the same
-/// predicate that decides dependency edges, so what is declared and what
-/// is drawn can never drift apart.
+/// Social cards retain their existing PNG/JPEG compositing contract. WebP
+/// derivative support intentionally does not broaden this separate
+/// generated artifact family. External heroes, SVG/GIF/WebP heroes, and
+/// unset heroes yield a metadata-only card.
 pub fn social_image_hero(entry: &ContentEntry) -> Option<String> {
     let image = entry.image.as_deref()?;
     let source = crate::asset::resolve_front_matter_image(image)?;
-    crate::asset::is_derivable_source(&source).then_some(source)
+    is_social_hero_source(&source).then_some(source)
+}
+
+fn is_social_hero_source(path: &str) -> bool {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    let ext = file.rsplit('.').next().unwrap_or_default();
+    matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg")
 }
 
 /// One page's social image resolved against the model: the page it belongs
@@ -289,6 +294,7 @@ mod tests {
         for (image, expected) in [
             ("images/hero.jpg", Some("images/hero.jpg")),
             ("/images/hero.png", Some("images/hero.png")),
+            ("images/hero.webp", None),
             ("images/logo.svg", None),
             ("images/anim.gif", None),
             ("https://cdn.example/hero.jpg", None),

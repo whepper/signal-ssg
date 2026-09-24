@@ -61,6 +61,24 @@ fn gradient_jpeg(width: u32, height: u32) -> Vec<u8> {
     bytes
 }
 
+/// Deterministic W × H RGB gradient WebP, encoded in-test.
+fn gradient_webp(width: u32, height: u32) -> Vec<u8> {
+    let mut image = image::RgbImage::new(width, height);
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        pixel.0 = [(y % 256) as u8, (x % 256) as u8, ((x * y) % 256) as u8];
+    }
+    let mut bytes = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut bytes)
+        .write_image(
+            image.as_raw(),
+            width,
+            height,
+            image::ExtendedColorType::Rgb8,
+        )
+        .expect("fixture encodes");
+    bytes
+}
+
 fn site_with_images(dir: &Path, config_extra: &str) {
     write_site(
         dir,
@@ -166,6 +184,180 @@ fn derivatives_are_planned_resolved_and_valid_webp() {
         &record.output_digest, source_digest,
         "derivative output must differ from its source"
     );
+}
+
+#[test]
+fn webp_body_and_hero_sources_use_the_existing_derivative_pipeline() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_site(
+        dir.path(),
+        &[
+            (
+                "signal.toml",
+                "[site]\ntitle = \"WebP sources\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n[images]\nwidths = [80]\nformats = [\"avif\", \"webp\"]\n",
+            ),
+            (
+                "content/posts/webp.md",
+                "---\ntitle: WebP page\nimage: images/hero.webp\n---\n\nBody ![WebP](/images/body.webp).\n",
+            ),
+            (
+                "content/posts/plain.md",
+                "---\ntitle: Plain\n---\n\nNo images.\n",
+            ),
+            (
+                "templates/post.html",
+                "<html><body>{{ content | safe }}</body></html>",
+            ),
+            (
+                "templates/section.html",
+                "<html><body>section</body></html>",
+            ),
+        ],
+    );
+    write_bytes(
+        dir.path(),
+        "static/images/hero.webp",
+        &gradient_webp(160, 90),
+    );
+    write_bytes(
+        dir.path(),
+        "static/images/body.webp",
+        &gradient_webp(200, 100),
+    );
+    write_bytes(
+        dir.path(),
+        "static/images/unrelated.webp",
+        &gradient_webp(80, 40),
+    );
+
+    let out = dir.path().join("out");
+    let summary = build_site_from_disk(dir.path(), &out).expect("builds");
+    let derived: Vec<&str> = summary
+        .specs
+        .iter()
+        .filter(|spec| spec.kind == signal_core::ArtifactKind::DerivedImage)
+        .map(|spec| spec.path.as_str())
+        .collect();
+    assert_eq!(
+        derived,
+        vec![
+            "images/body-80.avif",
+            "images/body-80.webp",
+            "images/hero-80.avif",
+            "images/hero-80.webp",
+        ]
+    );
+    for path in ["images/body-80.webp", "images/hero-80.webp"] {
+        let bytes = std::fs::read(out.join(path)).expect("webp derivative");
+        assert!(bytes.starts_with(b"RIFF"), "{path}");
+        assert_eq!(&bytes[8..12], b"WEBP", "{path}");
+        let decoded = image::load_from_memory(&bytes).expect("webp derivative decodes");
+        assert!(decoded.width() > 0 && decoded.height() > 0, "{path}");
+    }
+    for path in ["images/body-80.avif", "images/hero-80.avif"] {
+        let bytes = std::fs::read(out.join(path)).expect("avif derivative");
+        assert_eq!(&bytes[4..12], b"ftypavif", "{path}");
+    }
+
+    let manifest = signal_cli::manifest::parse_manifest(
+        &std::fs::read_to_string(out.join(".signal/manifest.json")).expect("manifest"),
+    )
+    .expect("manifest parses");
+    assert!(manifest.assets.contains_key("images/hero.webp"));
+    assert!(manifest.assets.contains_key("images/body.webp"));
+    assert!(manifest.assets.contains_key("images/unrelated.webp"));
+    assert!(!manifest.artifacts.contains_key("images/unrelated-80.webp"));
+    assert!(!manifest.artifacts.contains_key("images/unrelated-80.avif"));
+    let page = manifest
+        .artifacts
+        .get("posts/webp/index.html")
+        .expect("page record");
+    for source in ["images/hero.webp", "images/body.webp"] {
+        assert!(
+            page.inputs.contains(&InputRef::Static {
+                path: source.to_string()
+            }),
+            "missing static input {source}: {:?}",
+            page.inputs
+        );
+        for format in ["avif", "webp"] {
+            assert!(
+                page.inputs.contains(&InputRef::DerivedImage {
+                    source: source.to_string(),
+                    width: 80,
+                    format: format.to_string(),
+                }),
+                "missing derivative input {source}/{format}: {:?}",
+                page.inputs
+            );
+        }
+    }
+    let check = check_site_from_disk(dir.path()).expect("check passes");
+    assert_eq!(check.assets.discovered, 3);
+    assert_eq!(check.assets.referenced, 2);
+    assert_eq!(check.assets.resolved, 2);
+    assert_eq!(check.assets.derivatives, 4);
+
+    // The source change invalidates the source, both derivatives, and the
+    // page. The unrelated WebP and its consumers remain untouched.
+    write_bytes(
+        dir.path(),
+        "static/images/hero.webp",
+        &gradient_webp(120, 60),
+    );
+    let text = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    for path in [
+        "images/hero.webp",
+        "images/hero-80.avif",
+        "images/hero-80.webp",
+        "posts/webp/index.html",
+    ] {
+        assert!(
+            text.contains(&format!("  {path}\n    reason: ")),
+            "got:\n{text}"
+        );
+    }
+    let reuse = text.split("Reuse:\n").nth(1).expect("reuse section");
+    assert!(reuse.contains("  images/body-80.avif\n"), "got:\n{text}");
+    assert!(reuse.contains("  images/body-80.webp\n"), "got:\n{text}");
+    assert!(reuse.contains("  images/unrelated.webp\n"), "got:\n{text}");
+    assert!(reuse.contains("  posts/plain/index.html\n"), "got:\n{text}");
+    build_site_from_disk(dir.path(), &out).expect("rebuilds");
+
+    // Independent clean builds remain byte-identical, including the new
+    // WebP-to-WebP and WebP-to-AVIF artifacts and the manifest.
+    let other = tempfile::tempdir().expect("second out");
+    build_site_from_disk(dir.path(), other.path()).expect("second build");
+    for path in [
+        "images/body-80.webp",
+        "images/body-80.avif",
+        "images/hero-80.webp",
+        "images/hero-80.avif",
+        ".signal/manifest.json",
+    ] {
+        assert_eq!(
+            std::fs::read(out.join(path)).expect("first output"),
+            std::fs::read(other.path().join(path)).expect("second output"),
+            "{path} differs"
+        );
+    }
+
+    // An unrelated WebP change rebuilds only that static artifact.
+    write_bytes(
+        dir.path(),
+        "static/images/unrelated.webp",
+        &gradient_webp(100, 50),
+    );
+    let text = signal_cli::explain::explain_site_from_disk(dir.path(), &out).expect("explains");
+    assert!(
+        text.contains(
+            "  images/unrelated.webp\n    reason: static file changed: images/unrelated.webp\n"
+        ),
+        "got:\n{text}"
+    );
+    let reuse = text.split("Reuse:\n").nth(1).expect("reuse section");
+    assert!(reuse.contains("  posts/plain/index.html\n"), "got:\n{text}");
+    assert!(reuse.contains("  posts/webp/index.html\n"), "got:\n{text}");
 }
 
 #[test]

@@ -45,7 +45,7 @@ Files under `static/` are copied to the output tree as planned static artifacts,
 
 ## Image derivatives
 
-With `[images]` configured (`widths` plus `format = "webp"` or `formats = ["avif", "webp"]`), content-referenced PNG/JPEG sources gain deterministic resized derivatives — aspect-preserving, never upscaled, one artifact per source × width × format. Rendered pages express them as responsive markup: a single planned format renders a responsive `<img>` (`srcset`, `sizes="100vw"`, intrinsic dimensions); several render `<picture>` with AVIF-first `<source>` elements and a WebP fallback. Front-matter heroes are available to templates as `responsive_image`. See [Configuration](../configuration/).
+With `[images]` configured (`widths` plus `format = "webp"` or `formats = ["avif", "webp"]`), content-referenced PNG/JPEG/WebP sources gain deterministic resized derivatives — aspect-preserving, never upscaled, one artifact per source × width × format. The derivative source formats are PNG, JPEG/JPG, and WebP; the configured output formats remain WebP and AVIF. Rendered pages express them as responsive markup: a single planned format renders a responsive `<img>` (`srcset`, `sizes="100vw"`, intrinsic dimensions); several render `<picture>` with AVIF-first `<source>` elements and a WebP fallback. Front-matter heroes are available to templates as `responsive_image`. See [Configuration](../configuration/).
 
 ## Social images
 

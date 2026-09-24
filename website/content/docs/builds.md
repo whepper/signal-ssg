@@ -43,8 +43,9 @@ The rule:
 | 11 | A3: responsive `srcset`/`sizes`/dimensions rendering and the `responsive_image` context |
 | 12 | A4: the AVIF derivative format and `<picture>` rendering |
 | 13 | A5: `[social]` configuration and generated Open Graph/Twitter social images |
+| 14 | WebP is accepted as an image derivative source; affected configured sites gain the existing derivatives and responsive markup |
 
-Versions 9–13 also carry each family's **generator identity**: the derivative encoders (lossless WebP, AVIF at fixed quality/speed), the responsive selection rules, and the social-image font, layout, and PNG encoder. That is why generated artifacts need no per-artifact encoder version — the behavior gate *is* their reuse identity, and changing a generator bumps it.
+Versions 9–14 also carry each family's **generator identity**: the derivative encoders (lossless WebP, AVIF at fixed quality/speed), the responsive selection rules, and the social-image font, layout, and PNG encoder. That is why generated artifacts need no per-artifact encoder version — the behavior gate *is* their reuse identity, and changing a generator or source-planning semantics bumps it.
 
 The behavior version is separate from `MANIFEST_SCHEMA_VERSION`: the schema says whether the metadata can be read, the behavior version says whether previously generated artifacts are semantically eligible for reuse.
 

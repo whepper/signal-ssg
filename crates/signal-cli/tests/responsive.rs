@@ -41,6 +41,24 @@ fn gradient_png(width: u32, height: u32) -> Vec<u8> {
     bytes
 }
 
+/// Deterministic W × H RGB gradient WebP, encoded in-test.
+fn gradient_webp(width: u32, height: u32) -> Vec<u8> {
+    let mut image = image::RgbImage::new(width, height);
+    for (x, y, pixel) in image.enumerate_pixels_mut() {
+        pixel.0 = [(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8];
+    }
+    let mut bytes = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut bytes)
+        .write_image(
+            image.as_raw(),
+            width,
+            height,
+            image::ExtendedColorType::Rgb8,
+        )
+        .expect("fixture encodes");
+    bytes
+}
+
 const POST_TEMPLATE: &str = concat!(
     "<html><body>",
     "{% if responsive_image %}",
@@ -110,6 +128,97 @@ fn body_images_render_responsive_markup_with_actual_dimensions() {
         html.contains("<img src=\"/images/hero-320.webp\" srcset=\"/images/hero-80.webp 80w, /images/hero-320.webp 160w\" sizes=\"100vw\" width=\"160\" height=\"90\" alt=\"Peak\" />"),
         "got:\n{html}"
     );
+}
+
+#[test]
+fn webp_sources_use_existing_responsive_and_picture_rendering() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_site(
+        dir.path(),
+        &[
+            (
+                "signal.toml",
+                "[site]\ntitle = \"Responsive WebP\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n[images]\nwidths = [80, 320]\nformats = [\"avif\", \"webp\"]\n",
+            ),
+            (
+                "content/posts/example.md",
+                "---\ntitle: WebP\nimage: images/hero.webp\nimage_alt: Hero alt\n---\n\nBody ![Body](/images/body.webp).\n",
+            ),
+            ("templates/post.html", POST_TEMPLATE),
+            (
+                "templates/section.html",
+                "<html><body>section {{ content | safe }}</body></html>",
+            ),
+        ],
+    );
+    write_bytes(
+        dir.path(),
+        "static/images/hero.webp",
+        &gradient_webp(160, 90),
+    );
+    write_bytes(
+        dir.path(),
+        "static/images/body.webp",
+        &gradient_webp(160, 90),
+    );
+    let out = dir.path().join("out");
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+
+    // Both the front-matter hero and the Markdown body source use the
+    // existing two-format selector: AVIF first, WebP fallback.
+    assert!(html.contains("<source type=\"image&#x2f;avif\" srcset=\"&#x2f;images&#x2f;hero-80.avif 80w, &#x2f;images&#x2f;hero-320.avif 160w\" />"), "got:\n{html}");
+    assert!(html.contains("<source type=\"image&#x2f;webp\" srcset=\"&#x2f;images&#x2f;hero-80.webp 80w, &#x2f;images&#x2f;hero-320.webp 160w\" />"), "got:\n{html}");
+    assert!(
+        html.contains("<img src=\"&#x2f;images&#x2f;hero-320.webp\""),
+        "got:\n{html}"
+    );
+    assert!(html.contains("<source type=\"image/avif\" srcset=\"/images/body-80.avif 80w, /images/body-320.avif 160w\" />"), "got:\n{html}");
+    assert!(html.contains("<source type=\"image/webp\" srcset=\"/images/body-80.webp 80w, /images/body-320.webp 160w\" />"), "got:\n{html}");
+    assert!(
+        html.contains("<img src=\"/images/body-320.webp\""),
+        "got:\n{html}"
+    );
+    assert_eq!(html.matches("<picture>").count(), 2, "got:\n{html}");
+}
+
+#[test]
+fn webp_source_with_webp_only_config_uses_plain_responsive_img() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_site(
+        dir.path(),
+        &[
+            (
+                "signal.toml",
+                "[site]\ntitle = \"Responsive WebP only\"\n[collections.posts]\nsource = \"content/posts\"\nroute_prefix = \"/posts/\"\n[images]\nwidths = [80]\nformat = \"webp\"\n",
+            ),
+            (
+                "content/posts/example.md",
+                "---\ntitle: WebP\nimage: images/hero.webp\nimage_alt: Hero alt\n---\n\nBody ![Body](/images/body.webp).\n",
+            ),
+            ("templates/post.html", POST_TEMPLATE),
+            (
+                "templates/section.html",
+                "<html><body>section {{ content | safe }}</body></html>",
+            ),
+        ],
+    );
+    write_bytes(
+        dir.path(),
+        "static/images/hero.webp",
+        &gradient_webp(160, 90),
+    );
+    write_bytes(
+        dir.path(),
+        "static/images/body.webp",
+        &gradient_webp(160, 90),
+    );
+    let out = dir.path().join("out");
+    build_site_from_disk(dir.path(), &out).expect("builds");
+    let html = std::fs::read_to_string(out.join("posts/example/index.html")).expect("page");
+    assert!(html.contains("<img src=\"&#x2f;images&#x2f;hero-80.webp\" srcset=\"&#x2f;images&#x2f;hero-80.webp 80w\" sizes=\"100vw\" width=\"80\" height=\"45\" alt=\"Hero alt\" />"), "got:\n{html}");
+    assert!(html.contains("<img src=\"/images/body-80.webp\" srcset=\"/images/body-80.webp 80w\" sizes=\"100vw\" width=\"80\" height=\"45\" alt=\"Body\" />"), "got:\n{html}");
+    assert!(!html.contains("<picture>"), "got:\n{html}");
 }
 
 #[test]

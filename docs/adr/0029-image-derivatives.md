@@ -42,7 +42,7 @@ signal-cli (filesystem boundary, owns the encoder):
 ```
 
 `signal-core` gains no `image` dependency and no `std::fs` use; the
-`image` crate (decode PNG/JPEG, Lanczos3 resize, lossless WebP encode)
+`image` crate (decode PNG/JPEG/WebP, Lanczos3 resize, lossless WebP encode)
 lives in `signal-cli` only, behind a small `images` module boundary so
 no codec details leak into the planner.
 
@@ -56,7 +56,7 @@ no codec details leak into the planner.
   sorted/deduplicated; `0` fails; there is no other author syntax and no
   Markdown change in A2.
 - **Planning is pure:** for every content-referenced raster source
-  (extension `png`/`jpg`/`jpeg`, matched against the planned `Static`
+  (extension `png`/`jpg`/`jpeg`/`webp`, matched against the planned `Static`
   inventory raw-then-decoded) crossed with every configured width, plan
   one `DerivedImage` spec. SVG, GIF, and other assets are never
   rasterized — they stay verbatim `Static` outputs. References that
@@ -112,6 +112,17 @@ no codec details leak into the planner.
   output paths) renders Source / Input dims+format / Derivative
   dims+format / Output / Dependencies / Action (`generate`) / Decision
   from the same plan the build uses.
+
+## Implementation correction: WebP source images
+
+The current derivative source classifier accepts `png`, `jpg`, `jpeg`, and
+`webp`. WebP remains an input format only: configured outputs are still the
+existing WebP and AVIF formats, and derivative identity, naming, clamping,
+dependency inputs, responsive selection, and output ordering are unchanged.
+The pinned `image` dependency already has WebP decoding enabled; this
+correction only extends extension planning and the shared source-validation
+label. The generation behavior version advances to 14 because configured
+sites with WebP references gain planned artifacts and responsive output.
 
 ## Consequences
 

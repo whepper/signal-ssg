@@ -44,15 +44,17 @@ Files under `static/` are copied to the output tree as planned static artifacts.
 ## Image derivatives
 
 With `[images]` configured (`widths` plus `format = "webp"` or
-`formats = ["avif", "webp"]`), content-referenced PNG/JPEG sources gain
+`formats = ["avif", "webp"]`), content-referenced PNG/JPEG/WebP sources gain
 deterministic resized derivatives (`hero-640.webp`, `hero-640.avif`, …):
 aspect-preserving, never upscaled, one artifact per source × width ×
 format, tracked as build inputs on both the derivative artifacts and the
 embedding pages, reused byte-identically when unchanged, and explainable
 per derivative via `signal explain <asset> --width W [--format F]`.
-Rendered pages express them as responsive markup: a single planned
-format renders a responsive `<img>`; several render `<picture>` with
-AVIF-first `<source>` elements and a WebP fallback `<img>`.
+The supported derivative source formats are PNG, JPEG/JPG, and WebP; the
+supported derivative output formats are WebP and AVIF. Rendered pages express
+them as responsive markup: a single planned format renders a responsive
+`<img>`; several render `<picture>` with AVIF-first `<source>` elements and
+a WebP fallback `<img>`.
 
 ## Social images
 

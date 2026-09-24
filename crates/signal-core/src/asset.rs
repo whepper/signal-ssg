@@ -350,18 +350,21 @@ impl std::fmt::Display for DerivativeFormat {
 }
 
 /// Whether a static path is a supported derivative source (A2): a
-/// content-referenced raster image with a `png`, `jpg`, or `jpeg`
+/// content-referenced raster image with a `png`, `jpg`, `jpeg`, or `webp`
 /// extension (case-insensitive).
 ///
 /// Extension-based and pure, so planning needs no file bytes. Content is
 /// verified at resolve/check time: a non-raster file wearing a raster
 /// extension fails clearly there instead of silently producing output.
-/// SVG, GIF, and every other type are never rasterized — they stay
+/// SVG, GIF, AVIF, and every other type are never rasterized — they stay
 /// verbatim static outputs.
 pub fn is_derivable_source(path: &str) -> bool {
     let file = path.rsplit('/').next().unwrap_or(path);
     let ext = file.rsplit('.').next().unwrap_or_default();
-    matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg")
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "webp"
+    )
 }
 
 /// One requested image derivative (A2, ADR 0029): a source asset plus
@@ -810,11 +813,18 @@ mod tests {
 
     #[test]
     fn derivable_sources_are_raster_only() {
-        for ok in ["hero.jpg", "HERO.JPG", "a.jpeg", "a.png", "dir/a.PNG"] {
+        for ok in [
+            "hero.jpg",
+            "HERO.JPG",
+            "a.jpeg",
+            "a.png",
+            "a.webp",
+            "dir/a.PNG",
+        ] {
             assert!(is_derivable_source(ok), "{ok:?}");
         }
         for skipped in [
-            "a.svg", "a.gif", "a.webp", "a.avif", "a.css", "a.js", "no-ext", "a.jpgx",
+            "a.svg", "a.gif", "a.avif", "a.css", "a.js", "no-ext", "a.jpgx",
         ] {
             assert!(!is_derivable_source(skipped), "{skipped:?}");
         }

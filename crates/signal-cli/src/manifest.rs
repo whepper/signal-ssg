@@ -89,8 +89,13 @@ pub const MANIFEST_FILE: &str = "manifest.json";
 /// pages on enabled sites gain an `og:image`/`twitter:*` card reference,
 /// and `SocialImage` artifacts carry the generator's identity (font,
 /// layout, encoder). Disabled sites produce byte-identical output but the
-/// config shape changed, so the gate rebuilds once.
-pub const GENERATION_BEHAVIOR_VERSION: u32 = 13;
+/// config shape changed, so the gate rebuilds once. `14` adds WebP as a
+/// valid derivative source: configured sites that reference WebP assets now
+/// plan derivatives and consume responsive markup through the existing
+/// pipeline. Existing PNG/JPEG and disabled-site output is unchanged, but the
+/// additional artifacts and page bytes require a one-time compatibility
+/// rebuild for affected sites.
+pub const GENERATION_BEHAVIOR_VERSION: u32 = 14;
 
 /// Identity of the code that produced a manifest.
 ///

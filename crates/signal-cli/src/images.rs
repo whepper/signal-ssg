@@ -10,7 +10,7 @@
 //!       ↓
 //! read source bytes (raw form, then percent-decoded form)
 //!       ↓
-//! decode (magic-sniffed PNG/JPEG) → dimensions
+//! decode (magic-sniffed PNG/JPEG/WebP) → dimensions
 //!       ↓
 //! resize to clamped aspect-preserving dimensions (skipped when equal)
 //!       ↓
@@ -53,7 +53,7 @@ pub struct DerivedOutput {
     pub source_width: u32,
     /// Decoded source height in pixels.
     pub source_height: u32,
-    /// Source format as decoded (PNG or JPEG).
+    /// Source format as decoded (PNG, JPEG, or WebP).
     pub source_format: String,
 }
 
@@ -107,6 +107,7 @@ fn format_name(format: image::ImageFormat) -> String {
     match format {
         image::ImageFormat::Png => "PNG".to_string(),
         image::ImageFormat::Jpeg => "JPEG".to_string(),
+        image::ImageFormat::WebP => "WebP".to_string(),
         other => format!("{other:?}"),
     }
 }
@@ -115,7 +116,7 @@ fn format_name(format: image::ImageFormat) -> String {
 ///
 /// Decode → clamp → resize (Lanczos3, skipped when the target equals the
 /// source) → encode in the spec's format (lossless WebP, fixed-setting
-/// AVIF). Only PNG/JPEG sources are accepted; anything else (GIF,
+/// AVIF). Only PNG/JPEG/WebP sources are accepted; anything else (GIF,
 /// SVG-as-bytes, unknown magic) is a deterministic error, never a silent
 /// conversion.
 pub fn render_derivative(bytes: &[u8], spec: &DerivativeSpec) -> Result<DerivedOutput, String> {
@@ -150,6 +151,8 @@ fn sniff_format(bytes: &[u8]) -> String {
         "PNG".to_string()
     } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
         "JPEG".to_string()
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "WebP".to_string()
     } else {
         "unknown".to_string()
     }
@@ -501,14 +504,14 @@ pub fn validate_derivative_sources(
     for source in sources {
         let (bytes, actual) = read_source_bytes(root, &source)?;
         // Extension support was decided at plan time; content support is
-        // decided here: only PNG/JPEG magic decodes.
+        // decided here: only PNG/JPEG/WebP magic decodes.
         match probe_dimensions(&bytes) {
-            Ok((_, _, format)) if format == "PNG" || format == "JPEG" => {}
+            Ok((_, _, format)) if matches!(format.as_str(), "PNG" | "JPEG" | "WebP") => {}
             Ok((_, _, format)) => {
                 return Err(BuildError::Read {
                     path: root.join("static").join(&actual).display().to_string(),
                     message: format!(
-                        "unsupported image content for {source:?}: decoded as {format}, only PNG and JPEG sources can be derived"
+                        "unsupported image content for {source:?}: decoded as {format}, only PNG, JPEG, and WebP sources can be derived"
                     ),
                 });
             }
@@ -549,6 +552,18 @@ mod tests {
         }
         let mut bytes = Vec::new();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 90)
+            .write_image(image.as_raw(), 160, 90, image::ExtendedColorType::Rgb8)
+            .expect("fixture encodes");
+        bytes
+    }
+
+    fn gradient_webp() -> Vec<u8> {
+        let mut image = image::RgbImage::new(160, 90);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            pixel.0 = [(x % 256) as u8, (y % 256) as u8, 128];
+        }
+        let mut bytes = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut bytes)
             .write_image(image.as_raw(), 160, 90, image::ExtendedColorType::Rgb8)
             .expect("fixture encodes");
         bytes
@@ -626,6 +641,31 @@ mod tests {
         let (width, height, format) = probe_dimensions(&gradient_jpeg()).expect("jpeg probes");
         assert_eq!((width, height), (160, 90));
         assert_eq!(format, "JPEG");
+    }
+
+    #[test]
+    fn probe_reads_webp_dimensions() {
+        let (width, height, format) = probe_dimensions(&gradient_webp()).expect("webp probes");
+        assert_eq!((width, height), (160, 90));
+        assert_eq!(format, "WebP");
+    }
+
+    #[test]
+    fn render_webp_source_to_webp_and_avif() {
+        let bytes = gradient_webp();
+        let webp = render_derivative(&bytes, &spec("images/hero.webp", 80)).expect("webp renders");
+        assert_eq!(webp.source_format, "WebP");
+        assert_eq!((webp.width, webp.height), (80, 45));
+        assert!(webp.bytes.starts_with(b"RIFF"));
+        assert_eq!(&webp.bytes[8..12], b"WEBP");
+        let back = image::load_from_memory(&webp.bytes).expect("webp output decodes");
+        assert_eq!((back.width(), back.height()), (80, 45));
+
+        let avif =
+            render_derivative(&bytes, &avif_spec("images/hero.webp", 80)).expect("avif renders");
+        assert_eq!(avif.source_format, "WebP");
+        assert_eq!((avif.width, avif.height), (80, 45));
+        assert_eq!(&avif.bytes[4..12], b"ftypavif");
     }
 
     #[test]

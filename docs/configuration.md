@@ -106,12 +106,14 @@ formats = ["avif", "webp"]
 ```
 
 Opt-in. When `widths` is non-empty, every content-referenced raster
-source (PNG/JPEG under `static/`) gains one `{stem}-{width}.{ext}`
+source (PNG, JPEG/JPG, or WebP under `static/`) gains one `{stem}-{width}.{ext}`
 derivative per width per format: deterministically resized
 (aspect-preserving Lanczos3, never upscaled — requests at or above the
 source width emit source dimensions) and encoded (lossless WebP; AVIF at
 fixed quality 70 / speed 10 via ravif — see `docs/adr/0031-avif-and-picture.md`).
-The legacy singular `format = "webp"` remains valid for one format;
+The supported derivative source formats are PNG, JPEG/JPG, and WebP; the
+supported derivative output formats are WebP and AVIF. The legacy singular
+`format = "webp"` remains valid for one format;
 `formats`, when non-empty, wins over `format`, and setting both is an
 error. Unknown formats fail; duplicates are deduplicated; author order
 never affects output. Embedding pages depend on these derivatives, so

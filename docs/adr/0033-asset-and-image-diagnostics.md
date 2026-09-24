@@ -68,7 +68,7 @@ observations never fail a build.
 
 A diagnostic is emitted only where the model can prove the condition:
 
-- **Unreferenced** is limited to raster sources (`png`/`jpg`/`jpeg`).
+- **Unreferenced** is limited to derivable raster sources (`png`/`jpg`/`jpeg`/`webp`).
   CSS, JS, SVG, and favicons are commonly referenced from templates, which
   the model does not track, so reporting them would be a false positive.
 - **Oversized** requires a configured `[images]` pipeline. With no
