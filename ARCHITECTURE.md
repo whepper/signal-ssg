@@ -29,6 +29,7 @@ stages but never skip an upstream one:
 | `build`         | yes    | yes                   | yes                  | yes  | yes     | yes   | yes      |
 | `serve`         | yes    | yes                   | yes                  | yes  | yes     | yes   | yes      |
 | `check`         | yes    | yes                   | yes                  | no   | no      | no    | no       |
+| `inspect`       | yes    | yes                   | yes                  | no   | no      | no    | no       |
 | `build --explain` | yes  | yes                   | yes                  | yes  | no      | no    | no       |
 | `explain`       | yes    | yes                   | yes                  | yes  | no      | no    | no       |
 
@@ -517,6 +518,28 @@ by the same read-then-decode rule.
 External destinations are classified and skipped (never fetched).
 Reference-style/autolink Markdown forms, template-literal URLs, and raw
 HTML are outside the structured model and intentionally unchecked.
+
+### 15.1 Page inspection projection
+
+`signal inspect` is a read-only CLI projection over the frozen model and the
+same validated specs/reference analysis used by `check`. It selects one
+published entry by logical route or stable source reference, then emits the
+versioned `signal.inspect/v1` schema documented in `docs/inspection.md`.
+
+The projection exposes resolved publishing facts that are awkward to
+reconstruct from source files: effective metadata, route/URL and publication
+state, parse-time heading ids, resolved outbound links, model-derived inbound
+links, referenced source assets, the existing shared-tag related projection,
+and page-scoped results from the existing advisory diagnostic analysis. It
+does not add a model, graph, diagnostic engine, artifact, manifest field, or
+build dependency.
+
+Inspection is bounded: headings, links, assets, related pages, and diagnostics
+report their pre-bound totals and an explicit truncation flag. Bodies, unknown
+front matter, templates, arbitrary files, and whole-site output are excluded.
+Selectors are matched against model identities, not used as filesystem paths;
+drafts never enter the model and therefore cannot be inspected. The operation
+performs no network access and writes nothing.
 
 ## 16. Asset and publishing pipeline (A1–A6)
 

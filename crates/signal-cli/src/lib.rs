@@ -35,6 +35,7 @@ pub mod explain;
 pub mod git;
 pub mod images;
 pub mod ingest;
+pub mod inspect;
 pub mod link_check;
 pub mod manifest;
 pub mod pipeline;

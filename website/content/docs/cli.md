@@ -3,7 +3,7 @@ title: CLI reference
 description: Every Signal command, flag, exit code, and output.
 ---
 
-Signal has four commands. `serve` reuses the production build pipeline; `check`, `explain`, and `build --explain` are read-only views over the same validation every build requires.
+Signal has five commands. `serve` reuses the production build pipeline; `check`, `inspect`, `explain`, and `build --explain` are read-only views over the same validation every build requires.
 
 ## signal build
 
@@ -99,6 +99,47 @@ diagnostics: 1 warning, 2 info
 Exit code is nonzero when the site is invalid. The one documented exception: the output-filesystem alias probe needs an output directory, so it runs in `build`/`--explain` only. Everything else a build rejects, `check` rejects identically. See [Reference validation](../validation/).
 
 `diagnostics` are advisory: evidence-based observations over the publishing model (unreferenced raster assets, oversized sources, widths that clamp to the same output, missing or empty image alt text). They never fail a build, and for a clean site the summary stays one line with no detail. See [Reference validation](../validation/#diagnostics-advisory).
+
+## signal inspect
+
+Inspect one published page's resolved, bounded context as deterministic JSON:
+
+```sh
+signal inspect --root my-site --format json /posts/hello-world/
+signal inspect --root my-site --format json content/posts/hello-world.md
+```
+
+| Argument/flag | Default | Meaning |
+|---|---|---|
+| `--root` | `.` | Site root containing `signal.toml` |
+| `page` | — | Canonical route or model source reference |
+| `--format` | `json` | Machine-readable output format; only `json` is currently public |
+
+`inspect` returns the public `signal.inspect/v1` projection: stable source
+reference, route and URL, publication state, effective metadata, headings and
+fragment ids, resolved outbound links, known inbound links, referenced source
+assets, the existing shared-tag related projection, and existing page-scoped
+advisory diagnostics. It reuses the same validation and diagnostic analysis as
+the other read-only commands. It does not need an output directory, build
+artifacts, a manifest, or network access.
+
+Every collection is bounded to 100 items and reports `total` and `truncated`.
+The command does not include body HTML/plain text, unknown front matter,
+templates, arbitrary repository files, binary assets, or the whole site. Drafts
+are not exposed: only entries present in the published model can be selected.
+An unknown, draft, or malformed page fails before JSON is emitted.
+
+This is authoritative context, not an editing API. An agent can read and edit
+the source normally, use `inspect` to avoid reconstructing resolved routes,
+metadata, anchors, and relationships, then run `check` and review the diff.
+Editorial suggestions remain the agent's judgement; Signal does not produce a
+content-quality score. The repository's `docs/inspection.md` guide contains
+the full schema, real fixture output, bounds, and security/privacy boundary.
+
+MCP is not required to use this interface. A client can invoke the CLI
+on demand; Signal does not need to run continuously. An MCP adapter is
+deferred unless a real client workflow demonstrates that direct CLI access is
+materially worse.
 
 ## signal explain
 

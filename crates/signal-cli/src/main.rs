@@ -67,6 +67,17 @@ enum Commands {
         #[arg(long)]
         format: Option<String>,
     },
+    /// Inspect one published page's resolved, bounded context as JSON.
+    Inspect {
+        /// Site root containing `signal.toml`.
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        /// Page route (for example `/posts/hello/`) or model source reference.
+        page: String,
+        /// Machine-readable output format. Only `json` is currently public.
+        #[arg(long, default_value = "json")]
+        format: String,
+    },
     /// Serve a site root locally with rebuilds on source changes.
     Serve {
         /// Site root containing `signal.toml`.
@@ -198,6 +209,17 @@ fn main() -> miette::Result<()> {
                     print!("{text}");
                 }
             }
+            Ok(())
+        }
+        Commands::Inspect { root, page, format } => {
+            if format != "json" {
+                return Err(miette::miette!(
+                    "unsupported inspect format {format:?}; use --format json"
+                ));
+            }
+            let inspection =
+                signal_cli::inspect::inspect_page_from_disk(&root, &page).into_diagnostic()?;
+            println!("{}", signal_cli::inspect::inspection_json(&inspection));
             Ok(())
         }
         Commands::Serve {

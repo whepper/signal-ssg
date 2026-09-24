@@ -73,6 +73,25 @@ pub struct ReferenceReport {
     pub external_skipped: usize,
 }
 
+/// One link as Signal's reference inventory resolves it for an inspector.
+///
+/// This is deliberately a small view over the same resolution used by
+/// [`validate_references`]. It is crate-visible because the public page
+/// inspection schema lives at the CLI boundary and must not duplicate URL
+/// resolution rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedPageLink {
+    /// The destination exactly as extracted from the normalized body.
+    pub raw: String,
+    /// `internal` or `external`.
+    pub kind: &'static str,
+    /// Canonical logical route or output-relative generated file for an
+    /// internal target. External links have no target.
+    pub target: Option<String>,
+    /// Fragment without the leading `#`, when authored.
+    pub fragment: Option<String>,
+}
+
 /// The authoritative target inventory for one site state: every route and
 /// file the current plan will generate, plus entry heading ids.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -271,28 +290,37 @@ fn resolve_route(source_route: &str, target: &str) -> Result<String, ReferenceRe
     Ok(route)
 }
 
-/// Whether a canonical route is generated. Tries the verbatim form first,
-/// then the percent-decoded form, so authored encoded routes (`/caf%C3%A9/`)
-/// match logical routes (`/café/`) without inventing normalization.
-fn is_known_route(inventory: &Inventory, route: &str) -> bool {
+/// Return the canonical logical route matching an authored route, if any.
+/// Tries the verbatim form first, then the percent-decoded form, so authored
+/// encoded routes (`/caf%C3%A9/`) return the model's logical route (`/café/`)
+/// rather than leaking the authored encoding into a public projection.
+fn canonical_known_route(inventory: &Inventory, route: &str) -> Option<String> {
     if inventory.routes.contains(route) {
-        return true;
+        return Some(route.to_string());
     }
-    match percent_decode(route) {
-        Some(decoded) => decoded != route && inventory.routes.contains(&decoded),
-        None => false,
+    percent_decode(route).and_then(|decoded| {
+        (decoded != route && inventory.routes.contains(&decoded)).then_some(decoded)
+    })
+}
+
+/// Whether a canonical route is generated.
+fn is_known_route(inventory: &Inventory, route: &str) -> bool {
+    canonical_known_route(inventory, route).is_some()
+}
+
+/// Return the canonical output-relative file matching an authored path.
+fn canonical_known_file(inventory: &Inventory, path: &str) -> Option<String> {
+    if inventory.files.contains(path) {
+        return Some(path.to_string());
     }
+    percent_decode(path).and_then(|decoded| {
+        (decoded != path && inventory.files.contains(&decoded)).then_some(decoded)
+    })
 }
 
 /// Whether an output-relative file path is generated (same raw/decoded rule).
 fn is_known_file(inventory: &Inventory, path: &str) -> bool {
-    if inventory.files.contains(path) {
-        return true;
-    }
-    match percent_decode(path) {
-        Some(decoded) => decoded != path && inventory.files.contains(&decoded),
-        None => false,
-    }
+    canonical_known_file(inventory, path).is_some()
 }
 
 /// Whether an output-relative static asset path exists.
@@ -519,6 +547,101 @@ pub fn validate_references(
         }
     }
     Ok(report)
+}
+
+/// Resolve one entry's inline Markdown links against the same inventory used
+/// by validation. The public inspection projection maps these values into a
+/// versioned schema; this function remains the single URL-resolution owner.
+pub(crate) fn resolve_page_links(
+    model: &SiteModel,
+    specs: &[ArtifactSpec],
+    entry: &signal_core::ContentEntry,
+) -> Result<Vec<ResolvedPageLink>, BuildError> {
+    let inventory = build_inventory(model, specs);
+    entry
+        .body
+        .links
+        .iter()
+        .map(|raw| {
+            resolve_page_link(&inventory, &entry.route.0, raw).map_err(|reason| {
+                BuildError::Reference {
+                    source_file: entry.source.relative_path.clone(),
+                    route: entry.route.0.clone(),
+                    target: raw.clone(),
+                    reason: reason.to_string(),
+                }
+            })
+        })
+        .collect()
+}
+
+/// Return the model-represented internal links that point at `target`.
+///
+/// The scan is over the frozen model and uses the same resolver as
+/// validation. It is a page-scoped reverse projection, not a second graph or
+/// build-dependency mechanism.
+pub(crate) fn inbound_page_links(
+    model: &SiteModel,
+    specs: &[ArtifactSpec],
+    target: &signal_core::ContentEntry,
+) -> Result<Vec<(signal_core::SourceRef, String)>, BuildError> {
+    let inventory = build_inventory(model, specs);
+    let mut out = Vec::new();
+    for entry in model.entries() {
+        for raw in &entry.body.links {
+            let resolved =
+                resolve_page_link(&inventory, &entry.route.0, raw).map_err(|reason| {
+                    BuildError::Reference {
+                        source_file: entry.source.relative_path.clone(),
+                        route: entry.route.0.clone(),
+                        target: raw.clone(),
+                        reason: reason.to_string(),
+                    }
+                })?;
+            if resolved.kind == "internal"
+                && resolved.target.as_deref() == Some(target.route.0.as_str())
+            {
+                out.push((entry.source.clone(), raw.clone()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn resolve_page_link(
+    inventory: &Inventory,
+    source_route: &str,
+    raw: &str,
+) -> Result<ResolvedPageLink, ReferenceReason> {
+    let target = raw.trim().to_string();
+    let split = match classify(&target) {
+        Classification::External => {
+            return Ok(ResolvedPageLink {
+                raw: target,
+                kind: "external",
+                target: None,
+                fragment: None,
+            });
+        }
+        Classification::Internal(split) => split,
+    };
+    let route = if split.path.is_empty() {
+        source_route.to_string()
+    } else {
+        resolve_route(source_route, &split.path)?
+    };
+    let resolved_target = if let Some(route) = canonical_known_route(inventory, &route) {
+        Some(route)
+    } else {
+        let file = route.trim_start_matches('/');
+        Some(canonical_known_file(inventory, file).ok_or(ReferenceReason::TargetMissing)?)
+    };
+    Ok(ResolvedPageLink {
+        raw: target,
+        kind: "internal",
+        target: resolved_target,
+        fragment: split.fragment,
+    })
 }
 
 /// What `signal check` reports.

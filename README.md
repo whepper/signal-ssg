@@ -122,10 +122,23 @@ referrers, generated derivatives, and reuse decision, and
 diagnostics — unreferenced assets, oversized sources, widths that clamp to
 the same output, and missing or empty alt text — which never fail a build.
 
+For a bounded, machine-readable view of one published page's resolved route,
+metadata, headings, links, relationships, assets, and diagnostics:
+
+```sh
+signal inspect --root my-site --format json /posts/hello-world/
+```
+
+See the [page inspection guide](docs/inspection.md) for the public
+`signal.inspect/v1` schema, bounds, security boundary, and agent authoring and
+audit workflows. It is read-only and does not expose arbitrary repository
+files or body content.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
 - [Concepts](docs/concepts.md)
+- [Page inspection](docs/inspection.md)
 - [Configuration](docs/configuration.md)
 - [Content](docs/content.md)
 - [Templates](docs/templates.md)
