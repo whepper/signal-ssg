@@ -18,7 +18,7 @@ target/release/signal
 
 ### Release binaries
 
-Push a tag such as `v1.1.0` to publish prebuilt binaries to the repository's
+Push a tag such as `v1.2.0` to publish prebuilt binaries to the repository's
 [GitHub Releases page](https://github.com/whepper/signal-ssg/releases). The
 release workflow provides archives for:
 
