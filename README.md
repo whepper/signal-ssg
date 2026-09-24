@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/whepper/signal-ssg/actions/workflows/ci.yml/badge.svg)](https://github.com/whepper/signal-ssg/actions/workflows/ci.yml)
 
-> **1.2.0**
+> **1.2.1**
 
 Signal is a deterministic static site generator written in Rust.
 
@@ -153,8 +153,8 @@ files or body content.
 
 ## Current status
 
-Signal 1.2 is stable. The current release is **1.2.0**: this minor release
-adds bounded page inspection and WebP derivative-source support while preserving
+Signal 1.2 is stable. The current release is **1.2.1**: this patch release
+adds responsive image metadata to the homepage featured hero while preserving
 1.x site configuration and CLI compatibility.
 
 Implemented today include Markdown ingestion, YAML/TOML front matter, collections, home and section pages, topics/taxonomy pages, RSS feeds (main, section, taxonomy label-index, and term), sitemap and robots.txt generation, a themed 404 page, search-index generation, related entries, template inheritance, deterministic manifests, hash-based incremental reuse, optional HTML output minification, opt-in Git-derived last-modified dates, first-class assets, deterministic image derivatives (WebP and AVIF) with responsive `srcset`/`<picture>` markup, generated Open Graph/Twitter social images, advisory asset and image diagnostics through `signal check` and `signal explain`, and hardened output/path handling.
