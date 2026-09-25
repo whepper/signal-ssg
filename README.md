@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="signal-logo.png" alt="Signal logo" width="600">
+</p>
+
 # Signal
 
 [![CI](https://github.com/whepper/signal-ssg/actions/workflows/ci.yml/badge.svg)](https://github.com/whepper/signal-ssg/actions/workflows/ci.yml)
